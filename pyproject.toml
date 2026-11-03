@@ -1,0 +1,29 @@
+# Runtime dependency pins are maintained in requirements.txt for now.
+[project]
+name = "acornwiki"
+version = "0.1.0"
+description = "A modular personal knowledge workspace."
+readme = "README.md"
+requires-python = ">=3.13"
+license = "MIT"
+
+[tool.pyright]
+pythonVersion = "3.13"
+typeCheckingMode = "strict"
+include = ["backend", "tests", "start.py"]
+exclude = [
+    "**/.git",
+    "**/.venv",
+    "**/__pycache__",
+    "**/node_modules",
+    "docs",
+    "frontend",
+    "tmp",
+]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]

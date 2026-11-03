@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:c2pa="http://c2pa.org/manifest" viewBox="0 0 256 256" role="img" aria-label="acornwiki outline 16x16" width="16" height="16"><g transform="translate(128 128) rotate(20) scale(0.92) translate(-128 -130)">
+  <path d="M126 65 C129 46 138 33 153 26" fill="none" stroke="#542c17" stroke-width="15" stroke-linecap="round"/>
+  <path d="M65 126 C64 172 86 213 123 234 Q128 238 133 234 C170 213 192 172 191 126 Z" fill="#e8b47f" stroke="#542c17" stroke-width="12" stroke-linejoin="round"/>
+  <path d="M42 111 C45 78 80 61 128 61 C176 61 211 78 214 111 C216 128 203 138 190 139 C155 126 101 126 66 139 C53 138 40 128 42 111 Z" fill="#c88b52" stroke="#542c17" stroke-width="12" stroke-linejoin="round"/>
+  </g>
+</svg>

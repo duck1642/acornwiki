@@ -1,0 +1,15 @@
+:global(*) {
+  box-sizing: border-box;
+}
+
+:global(html),
+:global(body),
+:global(#app) {
+  min-width: 320px;
+  min-height: 100%;
+  margin: 0;
+}
+
+:global(body) {
+  font-family: system-ui, sans-serif;
+}
