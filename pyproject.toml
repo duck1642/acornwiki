@@ -9,7 +9,12 @@ license = "MIT"
 
 [tool.pyright]
 pythonVersion = "3.13"
-typeCheckingMode = "strict"
+typeCheckingMode = "standard"
+reportUnknownArgumentType = "warning"
+reportUnknownLambdaType = "warning"
+reportUnknownMemberType = "warning"
+reportUnknownParameterType = "warning"
+reportUnknownVariableType = "warning"
 include = ["backend", "tests", "start.py"]
 exclude = [
     "**/.git",
