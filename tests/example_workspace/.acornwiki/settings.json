@@ -1,0 +1,29 @@
+{
+    "theme": "dark",
+    "colors": {},
+    "ui_font": [
+        "system-ui"
+    ],
+    "serif_font": [
+        "serif"
+    ],
+    "monospace_font": [
+        "monospace"
+    ],
+    "ui_font_size": 14,
+    "serif_font_size": 14,
+    "monospace_font_size": 14,
+    "attachment_folder": ".attachments",
+    "new_notes_folder": ".",
+    "deletion_mode": "recycle_bin",
+    "trash_bin_folder": null,
+    "automatic_link_update": true,
+    "separate_excluded_from_index": true,
+    "excluded_files": null,
+    "excluded_folders": null,
+    "not_indexed_files": null,
+    "not_indexed_folders": null,
+    "homepage": null,
+    "last_opened": null,
+    "startup_view": "empty"
+}
