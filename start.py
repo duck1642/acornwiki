@@ -59,16 +59,22 @@ def main() -> None:
         creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
     )
 
+    bridge = Bridge()
     try:
         wait_for_vite(process, address)
         print(f"Vite is ready: {address}")
         # PyWebView's create_window signature has incomplete type information.
-        webview.create_window(  # pyright: ignore[reportUnknownMemberType]
-            "acornwiki", address, js_api=Bridge()
+        window = webview.create_window(  # pyright: ignore[reportUnknownMemberType]
+            "acornwiki", address, js_api=bridge
         )
+        if window is None:
+            raise RuntimeError("PyWebView window could not be created")
+        # PyWebView types Window.state as a property rather than its state object.
+        bridge._attach_window(window)  # pyright: ignore[reportArgumentType]
         webview.settings["OPEN_DEVTOOLS_IN_DEBUG"] = False
         webview.start(debug=True)
     finally:
+        bridge._close()
         if process.poll() is None:
             process.terminate()
             try:

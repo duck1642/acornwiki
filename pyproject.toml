@@ -1,10 +1,11 @@
-# Runtime dependency pins are maintained in requirements.txt for now.
+# Keep direct runtime dependencies aligned with requirements.txt.
 [project]
 name = "acornwiki"
 version = "0.1.0"
 description = "A modular personal knowledge workspace."
 readme = "README.md"
 requires-python = ">=3.13"
+dependencies = ["pywebview==6.2.1", "watchdog==7.1.0"]
 license = "MIT"
 
 [tool.pyright]

@@ -6,3 +6,4 @@ pycparser==3.12
 pythonnet==3.2.1
 pywebview==6.2.1
 typing_extensions==4.16.0
+watchdog==7.1.0

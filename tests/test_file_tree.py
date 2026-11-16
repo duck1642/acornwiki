@@ -1,0 +1,175 @@
+"""Focused tests for file-tree caching, scheduling and Windows watcher events."""
+
+import tempfile
+import threading
+import time
+import unittest
+from pathlib import Path
+from typing import Callable
+from unittest.mock import patch
+
+from backend.app.bridge import Bridge
+from backend.services.filesystem import (
+    DirectorySnapshot,
+    FileTree,
+    FileTreeItem,
+    scan_dir,
+)
+
+
+def wait_until(predicate: Callable[[], bool], timeout: float = 5) -> None:
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        if predicate():
+            return
+        time.sleep(0.02)
+    raise AssertionError("Timed out waiting for file-tree update")
+
+
+def directory(tree: FileTree, path: str) -> DirectorySnapshot:
+    return next(d for d in tree.snapshot()["directories"] if d["path"] == path)
+
+
+class FileTreeTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.tree = FileTree(self.root, lambda: None)
+        self.addCleanup(self.temp.cleanup)
+        self.addCleanup(self.tree.close)
+
+    def test_lazy_load_cache_and_boundaries(self) -> None:
+        (self.root / "nested").mkdir()
+        (self.root / "nested" / "file.md").write_text("hello")
+        self.tree.set_visible("", True)
+        wait_until(lambda: directory(self.tree, "")["items"] is not None)
+        self.assertEqual([d["path"] for d in self.tree.snapshot()["directories"]], [""])
+        self.tree.set_visible("nested", True)
+        wait_until(lambda: directory(self.tree, "nested")["items"] is not None)
+        self.tree.set_visible("nested", False)
+        items = directory(self.tree, "nested")["items"] or []
+        self.assertEqual(items[0]["name"], "file.md")
+        with self.assertRaises(ValueError):
+            self.tree.set_visible("../outside", True)
+
+    def test_watcher_create_rename_delete_and_sort(self) -> None:
+        self.tree.set_visible("", True)
+        wait_until(lambda: directory(self.tree, "")["items"] is not None)
+        first = self.root / "z.md"
+        first.write_text("one")
+        wait_until(
+            lambda: any(
+                i["name"] == "z.md" for i in (directory(self.tree, "")["items"] or [])
+            )
+        )
+        first.rename(self.root / "a.md")
+        wait_until(
+            lambda: (
+                [i["name"] for i in (directory(self.tree, "")["items"] or [])]
+                == ["a.md"]
+            )
+        )
+        self.tree.set_sort("modified")
+        wait_until(
+            lambda: (
+                not directory(self.tree, "")["stale"]
+                and any(
+                    i["modified_time"] is not None
+                    for i in (directory(self.tree, "")["items"] or [])
+                )
+            )
+        )
+        (self.root / "a.md").unlink()
+        wait_until(lambda: directory(self.tree, "")["items"] == [])
+
+    def test_changes_during_scan_are_rescanned(self) -> None:
+        started, release = threading.Event(), threading.Event()
+        calls: list[Path] = []
+
+        def delayed(path: Path, include_modified: bool = False) -> list[FileTreeItem]:
+            calls.append(path)
+            if len(calls) == 1:
+                started.set()
+                release.wait(3)
+            return scan_dir(path, include_modified)
+
+        with patch("backend.services.filesystem.scan_dir", side_effect=delayed):
+            self.tree.set_visible("", True)
+            self.assertTrue(started.wait(3))
+            self.tree.path_changed(self.root / "new.md")
+            release.set()
+            wait_until(
+                lambda: len(calls) >= 2 and not directory(self.tree, "")["stale"]
+            )
+
+    def test_watcher_failure_and_refresh(self) -> None:
+        self.tree.set_visible("", True)
+        wait_until(lambda: directory(self.tree, "")["items"] is not None)
+        self.tree.invalidate_all("events lost")
+        self.assertEqual(self.tree.snapshot()["watcher_error"], "events lost")
+        wait_until(lambda: not directory(self.tree, "")["stale"])
+
+    def test_missing_directory_reports_error_and_retries(self) -> None:
+        self.tree.set_visible("missing", True)
+        wait_until(lambda: directory(self.tree, "missing")["error"] is not None)
+        (self.root / "missing").mkdir()
+        self.tree.refresh("missing")
+        wait_until(lambda: directory(self.tree, "missing")["items"] == [])
+
+    def test_closed_folder_updates_after_delay(self) -> None:
+        (self.root / "folder").mkdir()
+        with patch("backend.services.filesystem.CLOSED_DELAY", 0.1):
+            self.tree.set_visible("folder", True)
+            wait_until(lambda: directory(self.tree, "folder")["items"] == [])
+            self.tree.set_visible("folder", False)
+            (self.root / "folder" / "added.md").write_text("content")
+            wait_until(
+                lambda: any(
+                    item["name"] == "added.md"
+                    for item in (directory(self.tree, "folder")["items"] or [])
+                )
+            )
+
+    def test_bridge_rejects_previous_workspace(self) -> None:
+        bridge = Bridge()
+        self.addCleanup(bridge._close)
+        first = bridge.open_workspace(str(self.root))["workspace_id"]
+        other = self.root / "other"
+        other.mkdir()
+        second = bridge.open_workspace(str(other))["workspace_id"]
+        self.assertNotEqual(first, second)
+        with self.assertRaises(ValueError):
+            bridge.get_tree(first)
+
+    def test_visible_scan_precedes_queued_closed_scan(self) -> None:
+        for name in ("busy1", "busy2", "closed", "open"):
+            (self.root / name).mkdir()
+        release = threading.Event()
+        started: list[str] = []
+        lock = threading.Lock()
+
+        def delayed(path: Path, include_modified: bool = False) -> list[FileTreeItem]:
+            with lock:
+                started.append(path.name)
+            if path.name.startswith("busy"):
+                release.wait(5)
+            return scan_dir(path, include_modified)
+
+        with patch("backend.services.filesystem.scan_dir", side_effect=delayed):
+            self.tree.set_visible("busy1", True)
+            self.tree.set_visible("busy2", True)
+            try:
+                wait_until(lambda: len(started) == 2)
+                with self.tree._condition:
+                    self.tree.set_visible("closed", True)
+                    self.tree.set_visible("closed", False)
+                    self.tree.set_visible("open", True)
+                release.set()
+                wait_until(lambda: len(started) == 4)
+                self.assertEqual(started[2], "open")
+            finally:
+                release.set()
+
+
+if __name__ == "__main__":
+    unittest.main()
