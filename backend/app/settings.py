@@ -33,6 +33,7 @@ def validate_settings(settings: dict[str, object]) -> None:
 def create_settings(path: Path) -> None:
     """Create default settings if the file does not already exist."""
     path.parent.mkdir(parents=True, exist_ok=True)
+    # Exclusive creation preserves an existing settings file, even if it appears between creating the parent directory and opening the file.
     try:
         with path.open("x", encoding="utf-8") as file:
             json.dump(default_settings(), file, indent=4)

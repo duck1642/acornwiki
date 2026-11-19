@@ -20,6 +20,7 @@ class FileTreeItem(TypedDict):
 
 def scan_dir(folder: Path, include_modified: bool = False) -> list[FileTreeItem]:
     """Read one directory without recursively scanning its children."""
+    # Read metadata only for date sorting: stat calls can add substantial I/O in large directories. Children are scanned separately when opened.
     with os.scandir(folder) as entries:
         return [
             {
@@ -68,6 +69,7 @@ class TreeSnapshot(TypedDict):
 
 @dataclass
 class Directory:
+    # A cached list stays available while stale or loading. version tracks invalidations so an in-flight scan cannot overwrite newer changes.
     items: list[FileTreeItem] | None = None
     stale: bool = True
     visible: bool = False
@@ -135,6 +137,7 @@ class FileTree:
         path = Path(relative)
         if path.anchor or ".." in path.parts:
             raise ValueError("Directory must stay inside the workspace")
+        # Resolving also catches symlinks that lead outside the workspace.
         resolved = (self.root / path).resolve()
         try:
             resolved.relative_to(self.root)
@@ -227,6 +230,7 @@ class FileTree:
             if self._closed:
                 return
             changed_path = relative.as_posix()
+            # Only cached directories need work. A moved or deleted folder can also invalidate cached lists anywhere beneath its old path.
             targets = [key]
             if invalidate_descendants:
                 targets.extend(
@@ -250,6 +254,7 @@ class FileTree:
                 deadline = time.monotonic() + (
                     OPEN_DELAY if directory.visible else CLOSED_DELAY
                 )
+                # Keep the earliest deadline: a stream of events cannot postpone refresh indefinitely. Visible folders wait less.
                 directory.deadline = (
                     min(directory.deadline, deadline)
                     if directory.deadline is not None
@@ -265,6 +270,7 @@ class FileTree:
             self._signal()
 
     def snapshot(self) -> TreeSnapshot:
+        # Snapshots contain all loaded directories, sorted on each request. This keeps the cache independent of sort order, at the cost of repeated sorting and larger bridge payloads as the tree grows.
         with self._condition:
             directories: list[DirectorySnapshot] = []
             for path, directory in self._directories.items():
@@ -289,6 +295,7 @@ class FileTree:
             }
 
     def _work(self) -> None:
+        # Workers claim one directory under the condition lock, then scan without holding it so watcher events and other calls can proceed.
         while True:
             with self._condition:
                 while True:
@@ -303,6 +310,7 @@ class FileTree:
                         and not directory.loading
                     ]
                     if ready:
+                        # Among scans whose deadlines have passed, prefer visible directories and then the earliest deadline.
                         key, directory = min(
                             ready,
                             key=lambda pair: (
@@ -352,6 +360,7 @@ class FileTree:
                 if self._closed:
                     return
                 directory.loading = False
+                # A change during the scan, or a switch to date sorting, makes its result unreliable. Schedule another scan instead.
                 if version != directory.version or (
                     self._sort_mode == "modified" and not include_modified
                 ):

@@ -47,6 +47,7 @@ def show_root(workspace_root: Path) -> None:
 
 def validate_workspace_settings(settings: dict[str, object]) -> None:
     """Check settings before accepting them from or writing them to a file."""
+    # JSON is external data. Require the complete known shape before using it; adding or migrating settings fields will therefore need an explicit plan.
     if settings.keys() != default_workspace_settings().keys():
         raise ValueError("Workspace settings contain missing or unknown fields")
 
@@ -71,6 +72,7 @@ def validate_workspace_settings(settings: dict[str, object]) -> None:
 
     for key in ("ui_font_size", "serif_font_size", "monospace_font_size"):
         size = settings[key]
+        # bool is a subclass of int in Python, but is not a valid font size.
         if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
             raise ValueError(f"{key} must be a positive integer")
 
@@ -126,6 +128,7 @@ def create_workspace_settings(workspace_root: Path) -> None:
     """Create default settings without replacing an existing file."""
     settings_file = workspace_settings_path(workspace_root)
     settings_file.parent.mkdir(parents=True, exist_ok=True)
+    # Exclusive creation avoids replacing settings created by another call.
     try:
         with settings_file.open("x", encoding="utf-8") as file:
             json.dump(default_workspace_settings(), file, ensure_ascii=False, indent=4)

@@ -34,6 +34,7 @@ class Bridge:
         self._window = window
 
     def _notify_loop(self) -> None:
+        # Event coalesces pending signals. The revision is only a wake-up: the frontend fetches the authoritative snapshot through the bridge.
         while True:
             self._signal_event.wait()
             self._signal_event.clear()
@@ -73,6 +74,7 @@ class Bridge:
     def _require_tree(self, workspace_id: str) -> FileTree:
         if not isinstance(workspace_id, str):
             raise TypeError("workspace_id must be a string")
+        # Reject calls belonging to a workspace that has since been replaced.
         tree = self._tree
         if tree is None or tree.workspace_id != workspace_id:
             raise ValueError("Workspace is no longer active")
