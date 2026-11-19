@@ -12,15 +12,21 @@
   type TreeRow =
     | { kind: 'item'; path: string; item: FileTreeItem; depth: number }
     | { kind: 'status'; path: string; message: string; depth: number; error: boolean }
+  type NoteSnapshot = { path: string; content: string; version: string }
   type TreeApi = {
     ping: () => Promise<string>
-    get_settings: () => Promise<{ workspaces: string[] }>
+    get_settings: () => Promise<{ workspaces: string[]; editor: { autosave: boolean; auto_reload: boolean; reload_notice: boolean } }>
+    set_editor_preference: (name: string, value: boolean) => Promise<void>
     get_workspace_settings: (path: string) => Promise<Record<string, unknown>>
     open_workspace: (path: string) => Promise<TreeSnapshot>
     get_tree: (id: string) => Promise<TreeSnapshot>
     set_directory_visible: (id: string, path: string, visible: boolean) => Promise<TreeSnapshot>
     set_tree_sort: (id: string, sort: SortMode) => Promise<TreeSnapshot>
     refresh_tree: (id: string, path: string | null) => Promise<TreeSnapshot>
+    read_note: (id: string, path: string) => Promise<NoteSnapshot>
+    save_note: (id: string, path: string, content: string, version: string) => Promise<NoteSnapshot>
+    set_active_note: (id: string, path: string) => Promise<void>
+    finish_close: () => Promise<void>
   }
   declare global {
     interface Window {
@@ -31,15 +37,18 @@
 
 <script lang="ts">
   import { onMount, tick } from 'svelte'
+  import NoteEditor from './NoteEditor.svelte'
 
   let ready = $state(false)
-  let message = $state('Köprü bekleniyor...')
+  let message = $state('Waiting for backend...')
   let workspaces = $state<string[]>([])
   let workspacesLoaded = $state(false)
   let workspaceMessage = $state('')
   let loadingWorkspace = $state(false)
   let selectedWorkspace = $state<string | null>(null)
   let workspaceId = $state<string | null>(null)
+  let editor: NoteEditor | undefined = $state()
+  let selectedNote = $state<string | null>(null)
   let latestRevision = -1
   let sortMode = $state<SortMode>('alphabetic')
   let directories = $state.raw<Record<string, DirectorySnapshot>>({})
@@ -99,7 +108,12 @@
     let subscribedState: EventTarget | undefined
     function handleStateChange(event: Event) {
       const detail = (event as CustomEvent<{ key: string }>).detail
-      if (detail?.key === 'file_tree_revision') void syncTree()
+      if (detail?.key === 'file_tree_revision') { void syncTree(); editor?.scheduleExternalCheck() }
+      if (detail?.key === 'note_revision') editor?.scheduleExternalCheck()
+      if (detail?.key === 'close_request') void closeWindow()
+    }
+    async function closeWindow() {
+      if (!editor || await editor.prepareClose()) await window.pywebview?.api?.finish_close()
     }
     function updateBridgeStatus() {
       const webview = window.pywebview
@@ -107,12 +121,12 @@
         subscribedState = webview.state
         subscribedState.addEventListener('change', handleStateChange)
         ready = true
-        message = 'Köprü hazır.'
+        message = 'Backend connected.'
         void loadWorkspaces()
         void syncTree()
       }
     }
-    function onFocus() { void refreshTree(null) }
+    function onFocus() { void refreshTree(null); editor?.scheduleExternalCheck() }
     window.addEventListener('pywebviewready', updateBridgeStatus)
     window.addEventListener('focus', onFocus)
     updateBridgeStatus()
@@ -127,20 +141,22 @@
 
   async function ping() {
     try { message = await window.pywebview?.api?.ping() ?? message }
-    catch (error) { message = 'Backend ile bağlantı kurulamadı.'; console.error(error) }
+    catch (error) { message = 'Could not connect to the backend.'; console.error(error) }
   }
   async function loadWorkspaces() {
     const api = window.pywebview?.api
     if (!api) return
     try { workspaces = (await api.get_settings()).workspaces; workspacesLoaded = true }
-    catch (error) { workspaceMessage = 'Workspace listesi yüklenemedi.'; console.error(error) }
+    catch (error) { workspaceMessage = 'Could not load workspaces.'; console.error(error) }
   }
   async function selectWorkspace(path: string) {
     const api = window.pywebview?.api
     if (!api) return
+    if (editor && !(await editor.prepareClose())) return
     loadingWorkspace = true
     workspaceMessage = ''
     selectedWorkspace = null
+    selectedNote = null
     workspaceId = null
     latestRevision = -1
     directories = {}
@@ -156,7 +172,7 @@
       applySnapshot(snapshot)
       await syncTree()
     } catch (error) {
-      workspaceMessage = `Workspace açılamadı: ${path}. Klasörü ve ayarlarını kontrol et.`
+      workspaceMessage = `Could not open workspace: ${path}. Check the folder and its settings.`
       console.error(error)
     } finally { loadingWorkspace = false }
   }
@@ -169,7 +185,7 @@
     expandedFolders = closing ? expandedFolders.filter((p) => !affected.includes(p)) : [...expandedFolders, path]
     try {
       for (const folder of affected) applySnapshot(await api.set_directory_visible(id, folder, !closing))
-    } catch (error) { if (id === workspaceId) { workspaceMessage = 'Klasör güncellenemedi.'; console.error(error) } }
+    } catch (error) { if (id === workspaceId) { workspaceMessage = 'Could not update the folder.'; console.error(error) } }
   }
   async function changeSortMode(event: Event) {
     const target = event.currentTarget
@@ -179,14 +195,14 @@
     if (target.value !== 'alphabetic' && target.value !== 'modified') return
     sortMode = target.value
     try { applySnapshot(await api.set_tree_sort(id, sortMode)) }
-    catch (error) { workspaceMessage = 'Sıralama değiştirilemedi.'; console.error(error) }
+    catch (error) { workspaceMessage = 'Could not change sorting.'; console.error(error) }
   }
   async function refreshTree(path: string | null) {
     const api = window.pywebview?.api
     const id = workspaceId
     if (!api || !id) return
     try { applySnapshot(await api.refresh_tree(id, path)) }
-    catch (error) { if (id === workspaceId) { workspaceMessage = 'Ağaç yenilenemedi.'; console.error(error) } }
+    catch (error) { if (id === workspaceId) { workspaceMessage = 'Could not refresh the file tree.'; console.error(error) } }
   }
   async function handleTreeKeydown(event: KeyboardEvent) {
     if (event.key !== 'Tab' || !(event.target instanceof HTMLButtonElement) || !viewport) return
@@ -197,7 +213,7 @@
     let next = current + direction
     while (next >= 0 && next < visibleTree.length) {
       const row = visibleTree[next]
-      if ((row.kind === 'item' && row.item.is_directory) || (row.kind === 'status' && row.error)) break
+      if ((row.kind === 'item' && (row.item.is_directory || row.path.toLowerCase().endsWith('.md'))) || (row.kind === 'status' && row.error)) break
       next += direction
     }
     if (next < 0 || next >= visibleTree.length) return
@@ -230,8 +246,8 @@
         if (!item.is_directory || !expandedFolders.includes(path)) continue
         const dir = directories[path]
         if (dir?.items) addChildren(path, depth + 1)
-        if (dir?.error) rows.push({ kind: 'status', path, message: `Yenilenemedi: ${dir.error}`, depth: depth + 1, error: true })
-        else if ((!dir || dir.loading || dir.stale) && (!dir?.items || delayedRefreshes.includes(path))) rows.push({ kind: 'status', path, message: dir?.items ? 'Yenileniyor...' : 'Yükleniyor...', depth: depth + 1, error: false })
+        if (dir?.error) rows.push({ kind: 'status', path, message: `Refresh failed: ${dir.error}`, depth: depth + 1, error: true })
+        else if ((!dir || dir.loading || dir.stale) && (!dir?.items || delayedRefreshes.includes(path))) rows.push({ kind: 'status', path, message: dir?.items ? 'Refreshing...' : 'Loading...', depth: depth + 1, error: false })
       }
     }
     addChildren('', 0)
@@ -241,26 +257,27 @@
 
 <main class="app-shell">
   <h1>acornwiki</h1>
-  <button onclick={ping} disabled={!ready}>Bağlantıyı dene</button>
+  <button onclick={ping} disabled={!ready}>Test connection</button>
   <p aria-live="polite">{message}</p>
-  <h2>Workspace'ler</h2>
-  {#if workspacesLoaded && workspaces.length === 0}<p>Kayıtlı workspace yok.</p>{/if}
+  <h2>Workspaces</h2>
+  {#if workspacesLoaded && workspaces.length === 0}<p>No saved workspaces.</p>{/if}
   {#if workspaces.length > 0}
     <ul class="workspace-list">{#each workspaces as workspace}<li><button onclick={() => selectWorkspace(workspace)} disabled={loadingWorkspace}>{workspace}</button></li>{/each}</ul>
   {/if}
   {#if selectedWorkspace}
-    <p>Seçili workspace: <code>{selectedWorkspace}</code></p>
-    <section class="file-tree" aria-label="Workspace dosya ağacı">
+    <p>Selected workspace: <code>{selectedWorkspace}</code></p>
+    <div class="workspace-layout">
+    <section class="file-tree" aria-label="Workspace file tree">
       <div class="tree-heading">
-        <h2>Dosya ağacı</h2>
-        <button onclick={() => refreshTree(null)}>Yenile</button>
-        <label>Sıralama <select value={sortMode} onchange={changeSortMode}><option value="alphabetic">Alfabetik</option><option value="modified">Son değişiklik</option></select></label>
+        <h2>File tree</h2>
+        <button onclick={() => refreshTree(null)}>Refresh</button>
+        <label>Sort <select value={sortMode} onchange={changeSortMode}><option value="alphabetic">Alphabetical</option><option value="modified">Modified</option></select></label>
       </div>
-      {#if watcherError}<p role="alert">Dosya izleyici: {watcherError}. Elle yenileyin.</p>{/if}
-      {#if rootDirectory?.error}<p role="alert">{rootDirectory.error} <button onclick={() => refreshTree('')}>Tekrar dene</button></p>{/if}
-      {#if rootDirectory?.loading && (!rootDirectory.items || delayedRefreshes.includes(''))}<p aria-live="polite">{rootDirectory.items ? 'Yenileniyor...' : 'Workspace kökü yükleniyor...'}</p>{/if}
-      {#if rootDirectory?.items?.length === 0 && !rootDirectory.loading}<p>Bu workspace boş.</p>{/if}
-      <div class="tree-viewport" bind:this={viewport} bind:clientHeight={viewportHeight} tabindex="-1" aria-label="Kaydırılabilir dosya ağacı" onscroll={handleTreeScroll}>
+      {#if watcherError}<p role="alert">File watcher: {watcherError}. Refresh manually.</p>{/if}
+      {#if rootDirectory?.error}<p role="alert">{rootDirectory.error} <button onclick={() => refreshTree('')}>Retry</button></p>{/if}
+      {#if rootDirectory?.loading && (!rootDirectory.items || delayedRefreshes.includes(''))}<p aria-live="polite">{rootDirectory.items ? 'Refreshing...' : 'Loading workspace...'}</p>{/if}
+      {#if rootDirectory?.items?.length === 0 && !rootDirectory.loading}<p>This workspace is empty.</p>{/if}
+      <div class="tree-viewport" bind:this={viewport} bind:clientHeight={viewportHeight} tabindex="-1" aria-label="Scrollable file tree" onscroll={handleTreeScroll}>
         <ul class="tree-list">
           <li aria-hidden="true" style={`height: ${startRow * rowHeight}px`}></li>
           {#each renderedRows as row, index (row.kind === 'item' ? `item:${row.path}` : `status:${row.path}`)}
@@ -271,11 +288,13 @@
                     <button class="tree-folder" onclick={() => toggleFolder(row.path)} onkeydown={handleTreeKeydown} aria-expanded={expandedFolders.includes(row.path)}>
                       <span aria-hidden="true">{expandedFolders.includes(row.path) ? '▾' : '▸'}</span><span title={row.item.name}>{row.item.name}</span>
                     </button>
+                  {:else if row.path.toLowerCase().endsWith('.md')}
+                    <button class="tree-file tree-note" class:selected={selectedNote === row.path} aria-current={selectedNote === row.path ? 'true' : undefined} title={row.item.name} onclick={() => editor?.open(row.path)} onkeydown={handleTreeKeydown}>{row.item.name}</button>
                   {:else}<span class="tree-file" title={row.item.name}>{row.item.name}</span>{/if}
                 </div>
               {:else}
                 <div class="tree-status" style={`padding-left: ${8 + row.depth * 20}px`}>
-                  <span title={row.message}>{row.message}</span> {#if row.error}<button onclick={() => refreshTree(row.path)} onkeydown={handleTreeKeydown}>Tekrar dene</button>{/if}
+                  <span title={row.message}>{row.message}</span> {#if row.error}<button onclick={() => refreshTree(row.path)} onkeydown={handleTreeKeydown}>Retry</button>{/if}
                 </div>
               {/if}
             </li>
@@ -284,6 +303,8 @@
         </ul>
       </div>
     </section>
+    {#if workspaceId}<NoteEditor bind:this={editor} bind:selectedNote {workspaceId} />{/if}
+    </div>
   {/if}
   {#if workspaceMessage}<p role="alert">{workspaceMessage}</p>{/if}
 </main>

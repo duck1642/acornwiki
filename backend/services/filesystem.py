@@ -91,6 +91,11 @@ class ChangeHandler(FileSystemEventHandler):
         if "overflow" in event.event_type or "lost" in event.event_type:
             self.tree.invalidate_all("File watcher lost events; refresh required")
             return
+        # Notify the note separately so content edits do not fetch the whole tree.
+        if not event.is_directory:
+            for path in (event.src_path, event.dest_path):
+                if path:
+                    self.tree._note_changed(Path(os.fsdecode(path)))
         if event.event_type == "modified" and not event.is_directory:
             if not self.tree.uses_modified_sort():
                 return
@@ -105,12 +110,18 @@ class ChangeHandler(FileSystemEventHandler):
 class FileTree:
     """Own a workspace cache and serialize updates from watcher and scans."""
 
-    def __init__(self, root: Path, notify: Callable[[], None]) -> None:
+    def __init__(
+        self,
+        root: Path,
+        notify: Callable[[], None],
+        notify_note: Callable[[Path], None] | None = None,
+    ) -> None:
         self.root = root.resolve(strict=True)
         if not self.root.is_dir():
             raise NotADirectoryError(str(root))
         self.workspace_id = uuid4().hex
         self._notify = notify
+        self._note_changed: Callable[[Path], None] = notify_note or (lambda _path: None)
         self._condition = threading.Condition(threading.RLock())
         self._directories: dict[str, Directory] = {}
         self._revision = 0

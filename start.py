@@ -71,6 +71,7 @@ def main() -> None:
             raise RuntimeError("PyWebView window could not be created")
         # PyWebView types Window.state as a property rather than its state object.
         bridge._attach_window(window)  # pyright: ignore[reportArgumentType]
+        window.events.closing += bridge._request_close
         webview.settings["OPEN_DEVTOOLS_IN_DEBUG"] = False
         webview.start(debug=True)
     finally:

@@ -1,6 +1,8 @@
 """Manage application settings and the persistent list of workspace paths."""
 
 import json
+import os
+import tempfile
 from pathlib import Path
 
 SETTINGS_PATH: Path = Path.home() / "acornwiki" / "settings.json"
@@ -9,9 +11,15 @@ SETTINGS_PATH: Path = Path.home() / "acornwiki" / "settings.json"
 def default_settings() -> dict[str, object]:
     """Return a new set of default application settings."""
     return {
-        "language": "en", 
+        "language": "en",
         "workspaces": [],
+        "editor": default_editor_settings(),
     }
+
+
+def default_editor_settings() -> dict[str, bool]:
+    """Return the default saving and external-change preferences."""
+    return {"autosave": False, "auto_reload": True, "reload_notice": True}
 
 
 def validate_settings(settings: dict[str, object]) -> None:
@@ -28,6 +36,12 @@ def validate_settings(settings: dict[str, object]) -> None:
     for workspace in workspaces:
         if not isinstance(workspace, str):
             raise ValueError("workspaces must be a list of strings")
+
+    editor = settings["editor"]
+    if not isinstance(editor, dict) or editor.keys() != default_editor_settings().keys():
+        raise ValueError("editor must contain the known editor preferences")
+    if any(not isinstance(value, bool) for value in editor.values()):
+        raise ValueError("editor preferences must be booleans")
 
 
 def create_settings(path: Path) -> None:
@@ -47,7 +61,21 @@ def save_settings(path: Path, settings: dict[str, object]) -> None:
     validate_settings(settings)
     content = json.dumps(settings, ensure_ascii=False, indent=4)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content + "\n", encoding="utf-8")
+    temporary: str | None = None
+    try:
+        # Keep the old settings file intact if serialization or writing fails.
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=path.parent, delete=False
+        ) as file:
+            temporary = file.name
+            file.write(content + "\n")
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(temporary, path)
+        temporary = None
+    finally:
+        if temporary is not None:
+            os.unlink(temporary)
 
 
 def load_settings(path: Path) -> dict[str, object]:
@@ -60,5 +88,8 @@ def load_settings(path: Path) -> dict[str, object]:
     data: object = json.loads(content)
     if not isinstance(data, dict):
         raise ValueError("Settings must be a JSON object")
+    # Existing settings predate the editor field; keep all other fields intact.
+    if "editor" not in data:
+        data["editor"] = default_editor_settings()
     validate_settings(data)
     return data

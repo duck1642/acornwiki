@@ -15,7 +15,7 @@ body {
 }
 
 .app-shell {
-  max-width: 900px;
+  max-width: 1400px;
   height: 100dvh;
   margin: 0 auto;
   padding: 12px;
@@ -50,7 +50,8 @@ body {
 
 .file-tree {
   min-height: 0;
-  flex: 1;
+  min-width: 240px;
+  flex: 0 1 35%;
   display: flex;
   flex-direction: column;
   margin-top: 8px;
@@ -58,11 +59,59 @@ body {
   border: 1px solid #b8b8b8;
 }
 
+.workspace-layout {
+  display: flex;
+  gap: 8px;
+  flex: 1;
+  min-height: 0;
+}
+
+.note-panel {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px solid #b8b8b8;
+}
+
+.note-toolbar, .note-settings, .note-conflict {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.note-toolbar strong {
+  overflow-wrap: anywhere;
+}
+
+.note-content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.note-content .cm-editor { height: 100%; }
+.note-content .cm-scroller { overflow: auto; }
+.note-content[hidden] { display: none; }
+.note-read img { max-width: 100%; }
+
+@media (max-width: 650px) {
+  .workspace-layout { flex-direction: column; }
+  .file-tree { flex: 1; min-width: 0; }
+  .note-panel { flex: 1; }
+}
+
 .tree-heading {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 8px;
 }
 
 .tree-heading h2 {
@@ -125,6 +174,20 @@ body {
 
 .tree-file {
   padding: 4px 0 4px 18px;
+}
+
+.tree-note {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tree-note.selected {
+  background: #dceaff;
+  border-radius: 3px;
 }
 
 .tree-status {
