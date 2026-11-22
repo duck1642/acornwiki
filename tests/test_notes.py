@@ -131,13 +131,13 @@ class NoteTests(unittest.TestCase):
         workspace = bridge.open_workspace(str(self.root))["workspace_id"]
         with patch("backend.app.bridge.os.startfile", create=True) as open_file:
             with patch("backend.app.bridge.sys.platform", "win32"):
-                bridge.open_local_file(workspace, "note.md", "guide.pdf")
+                bridge.open_workspace_file(workspace, "guide.pdf")
                 open_file.assert_called_once_with(document)
-                for invalid in ("../outside.pdf", "missing.pdf", "guide.pdf#page"):
+                for invalid in ("../outside.pdf", "missing.pdf"):
                     with self.subTest(invalid=invalid), self.assertRaises((ValueError, OSError)):
-                        bridge.open_local_file(workspace, "note.md", invalid)
+                        bridge.open_workspace_file(workspace, invalid)
                 with self.assertRaises(ValueError):
-                    bridge.open_local_file("old", "note.md", "guide.pdf")
+                    bridge.open_workspace_file("old", "guide.pdf")
                 open_file.assert_called_once()
 
     def test_blocked_file_is_not_opened_and_can_be_revealed(self) -> None:

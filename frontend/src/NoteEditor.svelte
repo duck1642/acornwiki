@@ -69,11 +69,16 @@
     const href = link.getAttribute('href') ?? ''
     const api = window.pywebview?.api
     if (!api) return
+    error = ''
     try {
       if (/^https?:\/\//i.test(href)) await api.open_external_link(href)
       else {
         const target = await api.resolve_note_link(workspaceId, path, href)
         if (!target.path.toLowerCase().endsWith('.md')) {
+          if (target.fragment) {
+            error = 'Opening a specific section of this file is not supported.'
+            return
+          }
           await openWorkspaceFile(workspaceId, target.path)
           return
         }

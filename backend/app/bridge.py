@@ -171,15 +171,6 @@ class Bridge:
             path, fragment = resolve_note_link(root, note, href)
             return {"path": path, "fragment": fragment}
 
-    def open_local_file(self, workspace_id: str, note: str, href: str) -> bool:
-        """Open an existing workspace file with the operating system's default app."""
-        with self._lock:
-            root = self._require_tree(workspace_id).root
-            path, fragment = resolve_note_link(root, note, href)
-            if fragment:
-                raise ValueError("File fragments are not supported")
-            return self.open_workspace_file(workspace_id, path)
-
     def _workspace_file(self, workspace_id: str, path: str) -> Path:
         """Validate a workspace-relative file path before a shell operation."""
         if not isinstance(path, str) or not path or Path(path).anchor:
