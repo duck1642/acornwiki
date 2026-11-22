@@ -82,6 +82,31 @@ class NoteTests(unittest.TestCase):
                 urlopen(address)
             self.assertEqual(error.exception.code, 404)
 
+    def test_nested_note_resolves_unicode_images_and_rejects_missing_targets(self) -> None:
+        nested = self.root / "notes"
+        nested.mkdir()
+        (nested / "günlük.md").write_text("test", encoding="utf-8")
+        image_dir = self.root / "görseller"
+        image_dir.mkdir()
+        (image_dir / "bir resim.png").write_bytes(b"image")
+        bridge = Bridge()
+        self.addCleanup(bridge._close)
+        workspace = bridge.open_workspace(str(self.root))["workspace_id"]
+        server = MediaServer(bridge._resolve_media)
+        self.addCleanup(server.close)
+
+        def request(src: str) -> str:
+            return server.url + "?" + urlencode(
+                {"workspace": workspace, "note": "notes/günlük.md", "src": src}
+            )
+
+        with urlopen(request("../görseller/bir%20resim.png")) as response:
+            self.assertEqual(response.read(), b"image")
+        for src in ("../görseller/yok.png", "../../outside.png", "../görseller/%00.png"):
+            with self.subTest(src=src), self.assertRaises(HTTPError) as error:
+                urlopen(request(src))
+            self.assertEqual(error.exception.code, 404)
+
     def test_symlink_outside_workspace_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as outside:
             target = Path(outside) / "outside.md"

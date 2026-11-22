@@ -52,6 +52,38 @@ class FileTreeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.tree.set_visible("../outside", True)
 
+    def test_create_note_and_folder_without_overwriting(self) -> None:
+        bridge = Bridge()
+        self.addCleanup(bridge._close)
+        workspace = bridge.open_workspace(str(self.root))["workspace_id"]
+        self.assertEqual(bridge.create_directory(workspace, "", "Notes"), "Notes")
+        self.assertEqual(bridge.create_note(workspace, "Notes", "Günlük"), "Notes/Günlük.md")
+        self.assertEqual(bridge.create_note(workspace, "Notes", "other.MD"), "Notes/other.MD")
+        existing = self.root / "Notes" / "Günlük.md"
+        existing.write_text("keep", encoding="utf-8")
+        with self.assertRaises(FileExistsError):
+            bridge.create_note(workspace, "Notes", "Günlük")
+        with self.assertRaises(FileExistsError):
+            bridge.create_directory(workspace, "", "Notes")
+        self.assertEqual(existing.read_text(encoding="utf-8"), "keep")
+        with self.assertRaises(ValueError):
+            bridge.create_note("old", "", "stale")
+
+    def test_create_rejects_invalid_names_and_outside_directory(self) -> None:
+        for name in ("", "..", " ", "CON", "bad/name", "bad\\name", "bad?.txt", "end."):
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                self.tree.create_entry("", name, False)
+        with self.assertRaises(ValueError):
+            self.tree.create_entry("../outside", "note.md", False)
+        with self.assertRaises(FileNotFoundError):
+            self.tree.create_entry("missing", "note.md", False)
+
+    def test_created_entry_refreshes_visible_tree(self) -> None:
+        self.tree.set_visible("", True)
+        wait_until(lambda: directory(self.tree, "")["items"] == [])
+        self.tree.create_entry("", "new.md", False)
+        wait_until(lambda: any(i["name"] == "new.md" for i in (directory(self.tree, "")["items"] or [])))
+
     def test_watcher_create_rename_delete_and_sort(self) -> None:
         self.tree.set_visible("", True)
         wait_until(lambda: directory(self.tree, "")["items"] is not None)

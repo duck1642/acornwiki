@@ -13,6 +13,7 @@ from backend.app.settings import SETTINGS_PATH, load_settings, save_settings
 from backend.app.workspace import load_workspace_settings
 from backend.modules.notes import (
     NoteSnapshot,
+    markdown_name,
     note_path,
     read_note,
     resolve_note_link,
@@ -161,6 +162,18 @@ class Bridge:
     def read_note(self, workspace_id: str, path: str) -> NoteSnapshot:
         with self._lock:
             return read_note(self._require_tree(workspace_id).root, path)
+
+    def create_note(self, workspace_id: str, directory: str, name: str) -> str:
+        """Create an empty Markdown note in the active workspace."""
+        with self._lock:
+            return self._require_tree(workspace_id).create_entry(
+                directory, markdown_name(name), False
+            )
+
+    def create_directory(self, workspace_id: str, directory: str, name: str) -> str:
+        """Create one folder in the active workspace."""
+        with self._lock:
+            return self._require_tree(workspace_id).create_entry(directory, name, True)
 
     def resolve_note_link(
         self, workspace_id: str, note: str, href: str

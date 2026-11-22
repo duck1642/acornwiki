@@ -1,5 +1,6 @@
 """Read workspace directories and manage the cached file tree."""
 
+import ntpath
 import os
 import threading
 import time
@@ -155,6 +156,30 @@ class FileTree:
         except ValueError as error:
             raise ValueError("Directory must stay inside the workspace") from error
         return path.as_posix() if path.parts else "", resolved
+
+    def create_entry(self, directory: str, name: str, is_directory: bool) -> str:
+        """Create one child without replacing an existing file or directory."""
+        if not isinstance(name, str) or not name or name in (".", ".."):
+            raise ValueError("A file or folder name is required")
+        if (
+            any(char in name for char in '/\\<>:"|?*')
+            or any(ord(char) < 32 for char in name)
+            or name.endswith((" ", "."))
+            or ntpath.isreserved(name)
+        ):
+            raise ValueError("Invalid file or folder name")
+        if not isinstance(is_directory, bool):
+            raise TypeError("is_directory must be a boolean")
+        key, parent = self._path(directory)
+        target = parent / name
+        # Exclusive creation makes an existing name an error instead of overwriting it.
+        if is_directory:
+            target.mkdir()
+        else:
+            with target.open("x", encoding="utf-8"):
+                pass
+        self.refresh(key)
+        return f"{key}/{name}" if key else name
 
     def _changed(self) -> None:
         self._revision += 1

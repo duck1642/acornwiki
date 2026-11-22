@@ -19,6 +19,13 @@ class NoteConflictError(Exception):
     """Signal that the file no longer matches the version being edited."""
 
 
+def markdown_name(name: str) -> str:
+    """Add the Markdown extension when the supplied name does not have it."""
+    if not isinstance(name, str) or not name.strip() or name.endswith((" ", ".")):
+        raise ValueError("A note name is required")
+    return name if name.lower().endswith(".md") else f"{name}.md"
+
+
 def resolve_note_link(root: Path, note: str, href: str) -> tuple[str, str]:
     """Resolve a relative link inside the workspace against its note."""
     if not isinstance(href, str) or not href:

@@ -24,6 +24,8 @@
     set_tree_sort: (id: string, sort: SortMode) => Promise<TreeSnapshot>
     refresh_tree: (id: string, path: string | null) => Promise<TreeSnapshot>
     read_note: (id: string, path: string) => Promise<NoteSnapshot>
+    create_note: (id: string, directory: string, name: string) => Promise<string>
+    create_directory: (id: string, directory: string, name: string) => Promise<string>
     resolve_note_link: (id: string, note: string, href: string) => Promise<{ path: string; fragment: string }>
     open_workspace_file: (id: string, path: string) => Promise<boolean>
     reveal_workspace_file: (id: string, path: string) => Promise<void>
@@ -62,6 +64,8 @@
   let sortMode = $state<SortMode>('alphabetic')
   let directories = $state.raw<Record<string, DirectorySnapshot>>({})
   let expandedFolders = $state<string[]>([])
+  let creationFolder = $state('')
+  let creating = $state(false)
   let watcherError = $state<string | null>(null)
   let visibleTree = $derived(buildVisibleTree())
   let rootDirectory = $derived(directories[''])
@@ -187,6 +191,7 @@
     latestRevision = -1
     directories = {}
     expandedFolders = []
+    creationFolder = ''
     scrollTop = 0
     if (viewport) viewport.scrollTop = 0
     sortMode = 'alphabetic'
@@ -209,9 +214,27 @@
     const closing = expandedFolders.includes(path)
     const affected = closing ? expandedFolders.filter((p) => p === path || p.startsWith(`${path}/`)) : [path]
     expandedFolders = closing ? expandedFolders.filter((p) => !affected.includes(p)) : [...expandedFolders, path]
+    if (closing && affected.includes(creationFolder)) creationFolder = ''
     try {
       for (const folder of affected) applySnapshot(await api.set_directory_visible(id, folder, !closing))
     } catch (error) { if (id === workspaceId) { workspaceMessage = 'Could not update the folder.'; console.error(error) } }
+  }
+  async function createEntry(kind: 'note' | 'folder') {
+    const api = window.pywebview?.api
+    const id = workspaceId
+    if (!api || !id || creating) return
+    const name = window.prompt(kind === 'note' ? 'New note name:' : 'New folder name:')
+    if (name === null) return
+    creating = true
+    workspaceMessage = ''
+    try {
+      if (kind === 'note') await api.create_note(id, creationFolder, name)
+      else await api.create_directory(id, creationFolder, name)
+      if (id === workspaceId) await syncTree()
+    } catch (error) {
+      if (id === workspaceId) workspaceMessage = 'Could not create the item. Check its name, location, and whether it already exists.'
+      console.error(error)
+    } finally { creating = false }
   }
   async function changeSortMode(event: Event) {
     const target = event.currentTarget
@@ -305,6 +328,11 @@
         <h2>File tree</h2>
         <button onclick={() => refreshTree(null)}>Refresh</button>
         <label>Sort <select value={sortMode} onchange={changeSortMode}><option value="alphabetic">Alphabetical</option><option value="modified">Modified</option></select></label>
+      </div>
+      <div class="tree-heading">
+        <label>Destination <select bind:value={creationFolder}><option value="">Workspace root</option>{#each expandedFolders as folder}<option value={folder}>{folder}</option>{/each}</select></label>
+        <button disabled={creating} onclick={() => createEntry('note')}>New note</button>
+        <button disabled={creating} onclick={() => createEntry('folder')}>New folder</button>
       </div>
       {#if watcherError}<p role="alert">File watcher: {watcherError}. Refresh manually.</p>{/if}
       {#if rootDirectory?.error}<p role="alert">{rootDirectory.error} <button onclick={() => refreshTree('')}>Retry</button></p>{/if}
