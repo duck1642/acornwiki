@@ -5,9 +5,18 @@ import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from urllib.error import HTTPError
+from urllib.parse import urlencode
+from urllib.request import urlopen
 
 from backend.app.bridge import Bridge, SharedState
-from backend.modules.notes import NoteConflictError, read_note, save_note
+from backend.modules.notes import (
+    NoteConflictError,
+    read_note,
+    resolve_note_link,
+    save_note,
+)
+from backend.services.media import MediaServer
 
 
 class NoteTests(unittest.TestCase):
@@ -35,6 +44,43 @@ class NoteTests(unittest.TestCase):
         with self.assertRaises(UnicodeDecodeError):
             read_note(self.root, "note.md")
         self.assertEqual(self.path.read_bytes(), b"\xff")
+
+    def test_relative_links_stay_within_workspace(self) -> None:
+        (self.root / "nested").mkdir()
+        note = "nested/note.md"
+        self.assertEqual(
+            resolve_note_link(self.root, note, "../images/a%20b.png"),
+            ("images/a b.png", ""),
+        )
+        self.assertEqual(resolve_note_link(self.root, note, "#my-heading"), (note, "my-heading"))
+        for href in (
+            "../../outside.png", "https://example.com/a", "C:/test.png",
+            "..%2F..%2Foutside.png",
+        ):
+            with self.subTest(href=href), self.assertRaises(ValueError):
+                resolve_note_link(self.root, note, href)
+
+    def test_media_server_uses_active_workspace_and_serves_images(self) -> None:
+        image = self.root / "image.png"
+        image.write_bytes(b"image bytes")
+        bridge = Bridge()
+        self.addCleanup(bridge._close)
+        workspace = bridge.open_workspace(str(self.root))["workspace_id"]
+        server = MediaServer(bridge._resolve_media)
+        self.addCleanup(server.close)
+
+        def url(src: str, workspace_id: str = workspace) -> str:
+            return server.url + "?" + urlencode(
+                {"workspace": workspace_id, "note": "note.md", "src": src}
+            )
+
+        with urlopen(url("image.png")) as result:
+            self.assertEqual(result.headers.get_content_type(), "image/png")
+            self.assertEqual(result.read(), b"image bytes")
+        for address in (url("../image.png"), url("note.md"), url("image.png", "old")):
+            with self.subTest(address=address), self.assertRaises(HTTPError) as error:
+                urlopen(address)
+            self.assertEqual(error.exception.code, 404)
 
     def test_symlink_outside_workspace_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as outside:
@@ -76,6 +122,42 @@ class NoteTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             bridge.save_note(first, "note.md", "stale", "anything")
         self.assertEqual(bridge.read_note(second, "note.md")["content"], "first\r\n")
+
+    def test_local_file_opens_only_from_active_workspace(self) -> None:
+        document = self.root / "guide.pdf"
+        document.write_bytes(b"pdf")
+        bridge = Bridge()
+        self.addCleanup(bridge._close)
+        workspace = bridge.open_workspace(str(self.root))["workspace_id"]
+        with patch("backend.app.bridge.os.startfile", create=True) as open_file:
+            with patch("backend.app.bridge.sys.platform", "win32"):
+                bridge.open_local_file(workspace, "note.md", "guide.pdf")
+                open_file.assert_called_once_with(document)
+                for invalid in ("../outside.pdf", "missing.pdf", "guide.pdf#page"):
+                    with self.subTest(invalid=invalid), self.assertRaises((ValueError, OSError)):
+                        bridge.open_local_file(workspace, "note.md", invalid)
+                with self.assertRaises(ValueError):
+                    bridge.open_local_file("old", "note.md", "guide.pdf")
+                open_file.assert_called_once()
+
+    def test_blocked_file_is_not_opened_and_can_be_revealed(self) -> None:
+        script = self.root / "run.EXE"
+        script.write_bytes(b"")
+        bridge = Bridge()
+        self.addCleanup(bridge._close)
+        workspace = bridge.open_workspace(str(self.root))["workspace_id"]
+        settings = self.root / "app-settings.json"
+        with patch("backend.app.bridge.SETTINGS_PATH", settings):
+            with patch("backend.app.bridge.sys.platform", "win32"):
+                with patch("backend.app.bridge.os.startfile", create=True) as open_file:
+                    self.assertFalse(bridge.open_workspace_file(workspace, "run.EXE"))
+                    open_file.assert_not_called()
+                    with patch("backend.app.bridge.subprocess.Popen") as launch:
+                        bridge.reveal_workspace_file(workspace, "run.EXE")
+                        launch.assert_called_once_with(["explorer.exe", "/select,", str(script)])
+                    bridge.set_blocked_extensions([".bat"])
+                    self.assertTrue(bridge.open_workspace_file(workspace, "run.EXE"))
+                    open_file.assert_called_once_with(script)
 
     def test_open_note_content_change_has_its_own_signal(self) -> None:
         class TestWindow:

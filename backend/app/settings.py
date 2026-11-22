@@ -6,6 +6,11 @@ import tempfile
 from pathlib import Path
 
 SETTINGS_PATH: Path = Path.home() / "acornwiki" / "settings.json"
+DEFAULT_BLOCKED_EXTENSIONS = (
+    ".exe", ".com", ".bat", ".cmd", ".ps1", ".vbs", ".vbe", ".js", ".jse",
+    ".wsf", ".wsh", ".msc", ".msi", ".msp", ".scr", ".hta", ".cpl",
+    ".jar", ".lnk", ".url", ".app", ".sh", ".command", ".desktop", ".pyw",
+)
 
 
 def default_settings() -> dict[str, object]:
@@ -14,6 +19,7 @@ def default_settings() -> dict[str, object]:
         "language": "en",
         "workspaces": [],
         "editor": default_editor_settings(),
+        "blocked_extensions": list(DEFAULT_BLOCKED_EXTENSIONS),
     }
 
 
@@ -42,6 +48,16 @@ def validate_settings(settings: dict[str, object]) -> None:
         raise ValueError("editor must contain the known editor preferences")
     if any(not isinstance(value, bool) for value in editor.values()):
         raise ValueError("editor preferences must be booleans")
+
+    extensions = settings["blocked_extensions"]
+    if not isinstance(extensions, list):
+        raise ValueError("blocked_extensions must contain extensions such as .exe")
+    extension_items: list[object] = extensions
+    if any(
+        not isinstance(ext, str) or not ext.startswith(".") or not ext[1:].isalnum()
+        for ext in extension_items
+    ):
+        raise ValueError("blocked_extensions must contain extensions such as .exe")
 
 
 def create_settings(path: Path) -> None:
@@ -91,5 +107,7 @@ def load_settings(path: Path) -> dict[str, object]:
     # Existing settings predate the editor field; keep all other fields intact.
     if "editor" not in data:
         data["editor"] = default_editor_settings()
+    if "blocked_extensions" not in data:
+        data["blocked_extensions"] = list(DEFAULT_BLOCKED_EXTENSIONS)
     validate_settings(data)
     return data

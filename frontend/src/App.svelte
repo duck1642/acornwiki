@@ -15,7 +15,7 @@
   type NoteSnapshot = { path: string; content: string; version: string }
   type TreeApi = {
     ping: () => Promise<string>
-    get_settings: () => Promise<{ workspaces: string[]; editor: { autosave: boolean; auto_reload: boolean; reload_notice: boolean } }>
+    get_settings: () => Promise<{ workspaces: string[]; blocked_extensions: string[]; editor: { autosave: boolean; auto_reload: boolean; reload_notice: boolean } }>
     set_editor_preference: (name: string, value: boolean) => Promise<void>
     get_workspace_settings: (path: string) => Promise<Record<string, unknown>>
     open_workspace: (path: string) => Promise<TreeSnapshot>
@@ -24,6 +24,12 @@
     set_tree_sort: (id: string, sort: SortMode) => Promise<TreeSnapshot>
     refresh_tree: (id: string, path: string | null) => Promise<TreeSnapshot>
     read_note: (id: string, path: string) => Promise<NoteSnapshot>
+    resolve_note_link: (id: string, note: string, href: string) => Promise<{ path: string; fragment: string }>
+    open_workspace_file: (id: string, path: string) => Promise<boolean>
+    reveal_workspace_file: (id: string, path: string) => Promise<void>
+    set_blocked_extensions: (extensions: string[]) => Promise<void>
+    media_url: (id: string) => Promise<string>
+    open_external_link: (url: string) => Promise<void>
     save_note: (id: string, path: string, content: string, version: string) => Promise<NoteSnapshot>
     set_active_note: (id: string, path: string) => Promise<void>
     finish_close: () => Promise<void>
@@ -38,12 +44,15 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
   import NoteEditor from './NoteEditor.svelte'
+  import { openWorkspaceFile } from './fileActions'
 
   let ready = $state(false)
   let message = $state('Waiting for backend...')
   let workspaces = $state<string[]>([])
   let workspacesLoaded = $state(false)
   let workspaceMessage = $state('')
+  let blockedExtensions = $state('')
+  let blockedMessage = $state('')
   let loadingWorkspace = $state(false)
   let selectedWorkspace = $state<string | null>(null)
   let workspaceId = $state<string | null>(null)
@@ -146,8 +155,25 @@
   async function loadWorkspaces() {
     const api = window.pywebview?.api
     if (!api) return
-    try { workspaces = (await api.get_settings()).workspaces; workspacesLoaded = true }
+    try {
+      const settings = await api.get_settings()
+      workspaces = settings.workspaces
+      blockedExtensions = (settings.blocked_extensions ?? []).join(', ')
+      workspacesLoaded = true
+    }
     catch (error) { workspaceMessage = 'Could not load workspaces.'; console.error(error) }
+  }
+  async function saveBlockedExtensions() {
+    try {
+      const extensions = blockedExtensions.split(/[\s,]+/).filter(Boolean)
+      await window.pywebview?.api?.set_blocked_extensions(extensions)
+      blockedMessage = 'Blocked extensions saved.'
+    } catch (error) { blockedMessage = 'Could not save blocked extensions. Use extensions such as .exe.'; console.error(error) }
+  }
+  async function openTreeFile(path: string) {
+    if (!workspaceId) return
+    try { await openWorkspaceFile(workspaceId, path) }
+    catch (error) { workspaceMessage = 'Could not open the file.'; console.error(error) }
   }
   async function selectWorkspace(path: string) {
     const api = window.pywebview?.api
@@ -213,7 +239,7 @@
     let next = current + direction
     while (next >= 0 && next < visibleTree.length) {
       const row = visibleTree[next]
-      if ((row.kind === 'item' && (row.item.is_directory || row.path.toLowerCase().endsWith('.md'))) || (row.kind === 'status' && row.error)) break
+      if (row.kind === 'item' || (row.kind === 'status' && row.error)) break
       next += direction
     }
     if (next < 0 || next >= visibleTree.length) return
@@ -259,6 +285,13 @@
   <h1>acornwiki</h1>
   <button onclick={ping} disabled={!ready}>Test connection</button>
   <p aria-live="polite">{message}</p>
+  <details>
+    <summary>Blocked file extensions</summary>
+    <p>Files with these extensions are shown in the tree but cannot be opened directly.</p>
+    <label>Extensions <textarea bind:value={blockedExtensions} rows="3"></textarea></label>
+    <button onclick={saveBlockedExtensions}>Save extensions</button>
+    {#if blockedMessage}<p role="status">{blockedMessage}</p>{/if}
+  </details>
   <h2>Workspaces</h2>
   {#if workspacesLoaded && workspaces.length === 0}<p>No saved workspaces.</p>{/if}
   {#if workspaces.length > 0}
@@ -290,7 +323,7 @@
                     </button>
                   {:else if row.path.toLowerCase().endsWith('.md')}
                     <button class="tree-file tree-note" class:selected={selectedNote === row.path} aria-current={selectedNote === row.path ? 'true' : undefined} title={row.item.name} onclick={() => editor?.open(row.path)} onkeydown={handleTreeKeydown}>{row.item.name}</button>
-                  {:else}<span class="tree-file" title={row.item.name}>{row.item.name}</span>{/if}
+                  {:else}<button class="tree-file" title={row.item.name} onclick={() => openTreeFile(row.path)} onkeydown={handleTreeKeydown}>{row.item.name}</button>{/if}
                 </div>
               {:else}
                 <div class="tree-status" style={`padding-left: ${8 + row.depth * 20}px`}>

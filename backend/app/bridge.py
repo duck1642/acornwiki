@@ -1,13 +1,23 @@
 """Translate PyWebView API calls into backend operations."""
 
 import os
+import subprocess
+import sys
 import threading
+import webbrowser
 from pathlib import Path
 from typing import Protocol
+from urllib.parse import urlsplit
 
 from backend.app.settings import SETTINGS_PATH, load_settings, save_settings
 from backend.app.workspace import load_workspace_settings
-from backend.modules.notes import NoteSnapshot, note_path, read_note, save_note
+from backend.modules.notes import (
+    NoteSnapshot,
+    note_path,
+    read_note,
+    resolve_note_link,
+    save_note,
+)
 from backend.services.filesystem import FileTree, TreeSnapshot
 
 
@@ -37,6 +47,7 @@ class Bridge:
         self._allow_close = False
         self._close_requested = False
         self._revision = 0
+        self._media_url = ""
         self._notifier = threading.Thread(target=self._notify_loop, daemon=True)
         self._notifier.start()
 
@@ -150,6 +161,96 @@ class Bridge:
     def read_note(self, workspace_id: str, path: str) -> NoteSnapshot:
         with self._lock:
             return read_note(self._require_tree(workspace_id).root, path)
+
+    def resolve_note_link(
+        self, workspace_id: str, note: str, href: str
+    ) -> dict[str, str]:
+        """Resolve a Markdown note link without opening it or discarding edits."""
+        with self._lock:
+            root = self._require_tree(workspace_id).root
+            path, fragment = resolve_note_link(root, note, href)
+            return {"path": path, "fragment": fragment}
+
+    def open_local_file(self, workspace_id: str, note: str, href: str) -> bool:
+        """Open an existing workspace file with the operating system's default app."""
+        with self._lock:
+            root = self._require_tree(workspace_id).root
+            path, fragment = resolve_note_link(root, note, href)
+            if fragment:
+                raise ValueError("File fragments are not supported")
+            return self.open_workspace_file(workspace_id, path)
+
+    def _workspace_file(self, workspace_id: str, path: str) -> Path:
+        """Validate a workspace-relative file path before a shell operation."""
+        if not isinstance(path, str) or not path or Path(path).anchor:
+            raise ValueError("Expected a workspace-relative path")
+        root = self._require_tree(workspace_id).root.resolve()
+        target = (root / path).resolve()
+        if not target.is_relative_to(root):
+            raise ValueError("File must stay inside the workspace")
+        if not target.is_file():
+            raise FileNotFoundError("Linked file does not exist")
+        return target
+
+    def open_workspace_file(self, workspace_id: str, path: str) -> bool:
+        """Open an allowed file or report that its extension is blocked."""
+        with self._lock:
+            target = self._workspace_file(workspace_id, path)
+            blocked = load_settings(SETTINGS_PATH)["blocked_extensions"]
+            if not isinstance(blocked, list):
+                raise ValueError("Invalid blocked extensions")
+            blocked_items: list[object] = blocked
+            if target.suffix.lower() in (ext.lower() for ext in blocked_items if isinstance(ext, str)):
+                return False
+            if sys.platform == "win32":
+                os.startfile(target)
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", str(target)])
+            else:
+                subprocess.Popen(["xdg-open", str(target)])
+            return True
+
+    def reveal_workspace_file(self, workspace_id: str, path: str) -> None:
+        """Show a workspace file in the file manager without opening it."""
+        with self._lock:
+            target = self._workspace_file(workspace_id, path)
+            if sys.platform == "win32":
+                subprocess.Popen(["explorer.exe", "/select,", str(target)])
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", "-R", str(target)])
+            else:
+                subprocess.Popen(["xdg-open", str(target.parent)])
+
+    def set_blocked_extensions(self, extensions: list[str]) -> None:
+        """Save the user-editable list of file extensions blocked from opening."""
+        if not isinstance(extensions, list) or any(not isinstance(x, str) for x in extensions):
+            raise ValueError("Expected a list of extensions")
+        with self._lock:
+            settings = load_settings(SETTINGS_PATH)
+            settings["blocked_extensions"] = list(dict.fromkeys(x.strip().lower() for x in extensions))
+            save_settings(SETTINGS_PATH, settings)
+
+    def media_url(self, workspace_id: str) -> str:
+        """Return the local image endpoint for the active workspace."""
+        with self._lock:
+            self._require_tree(workspace_id)
+            return self._media_url
+
+    def open_external_link(self, url: str) -> None:
+        """Open an ordinary web link in the user's default browser."""
+        if not isinstance(url, str) or urlsplit(url).scheme.lower() not in (
+            "http", "https"
+        ):
+            raise ValueError("Only HTTP and HTTPS links are supported")
+        webbrowser.open(url)
+
+    def _resolve_media(self, workspace_id: str, note: str, href: str) -> Path:
+        with self._lock:
+            root = self._require_tree(workspace_id).root
+            path, fragment = resolve_note_link(root, note, href)
+            if fragment:
+                raise ValueError("Image fragments are not supported")
+            return root / path
 
     def set_active_note(self, workspace_id: str, path: str) -> None:
         """Watch the note only after the frontend accepts its open result."""

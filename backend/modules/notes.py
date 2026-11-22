@@ -6,6 +6,7 @@ import stat
 import tempfile
 from pathlib import Path
 from typing import TypedDict
+from urllib.parse import unquote, urlsplit
 
 
 class NoteSnapshot(TypedDict):
@@ -16,6 +17,25 @@ class NoteSnapshot(TypedDict):
 
 class NoteConflictError(Exception):
     """Signal that the file no longer matches the version being edited."""
+
+
+def resolve_note_link(root: Path, note: str, href: str) -> tuple[str, str]:
+    """Resolve a relative link inside the workspace against its note."""
+    if not isinstance(href, str) or not href:
+        raise ValueError("Link must be a non-empty string")
+    parts = urlsplit(href)
+    if parts.scheme or parts.netloc or parts.query:
+        raise ValueError("Expected a relative local link")
+    decoded = unquote(parts.path)
+    if "\\" in decoded or "\x00" in decoded or Path(decoded).anchor:
+        raise ValueError("Invalid local link")
+    source = note_path(root, note)
+    target = (source.parent / decoded).resolve() if decoded else source
+    try:
+        relative = target.relative_to(root.resolve())
+    except ValueError as error:
+        raise ValueError("Link must stay inside the workspace") from error
+    return relative.as_posix(), unquote(parts.fragment)
 
 
 def note_path(root: Path, relative: str) -> Path:

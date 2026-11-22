@@ -11,6 +11,7 @@ from urllib.request import urlopen
 import webview
 
 from backend.app.bridge import Bridge
+from backend.services.media import MediaServer
 
 
 def available_port() -> int:
@@ -60,6 +61,8 @@ def main() -> None:
     )
 
     bridge = Bridge()
+    media = MediaServer(bridge._resolve_media)
+    bridge._media_url = media.url
     try:
         wait_for_vite(process, address)
         print(f"Vite is ready: {address}")
@@ -75,6 +78,7 @@ def main() -> None:
         webview.settings["OPEN_DEVTOOLS_IN_DEBUG"] = False
         webview.start(debug=True)
     finally:
+        media.close()
         bridge._close()
         if process.poll() is None:
             process.terminate()

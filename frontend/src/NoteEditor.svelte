@@ -1,11 +1,12 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
+  import { onMount, tick } from 'svelte'
   import { EditorState } from '@codemirror/state'
   import { EditorView, keymap } from '@codemirror/view'
   import { basicSetup } from 'codemirror'
   import { markdown } from '@codemirror/lang-markdown'
   import { marked } from 'marked'
   import DOMPurify from 'dompurify'
+  import { openWorkspaceFile } from './fileActions'
 
   let { workspaceId, selectedNote = $bindable(null) }: { workspaceId: string; selectedNote: string | null } = $props()
   let host: HTMLDivElement
@@ -33,8 +34,62 @@
   let externalTimer: ReturnType<typeof setTimeout> | undefined
   let saveTimer: ReturnType<typeof setTimeout> | undefined
   let savePromise: Promise<boolean> | undefined
+  let mediaUrl = $state('')
   let dirty = $derived(text !== savedText)
-  let rendered = $derived(mode === 'read' ? DOMPurify.sanitize(marked.parse(text, { async: false })) : '')
+  let rendered = $derived(mode === 'read' ? renderMarkdown(text, path, mediaUrl) : '')
+
+  function renderMarkdown(content: string, note: string | null, endpoint: string): string {
+    const template = document.createElement('template')
+    template.innerHTML = DOMPurify.sanitize(marked.parse(content, { async: false }))
+    const headings = new Map<string, number>()
+    for (const heading of template.content.querySelectorAll('h1,h2,h3,h4,h5,h6')) {
+      const slug = (heading.textContent ?? '').trim().toLowerCase().replace(/[^\p{L}\p{N}_\-\s]/gu, '').replace(/\s/g, '-')
+      const count = headings.get(slug) ?? 0
+      headings.set(slug, count + 1)
+      heading.id = count ? `${slug}-${count}` : slug
+    }
+    for (const image of template.content.querySelectorAll('img')) {
+      const src = image.getAttribute('src') ?? ''
+      if (/^https?:\/\//i.test(src)) continue
+      if (!note || !endpoint || !src || /^(?:[a-z][a-z\d+.-]*:|\/\/)/i.test(src)) {
+        image.removeAttribute('src')
+        continue
+      }
+      const params = new URLSearchParams({ workspace: workspaceId, note, src })
+      image.setAttribute('src', `${endpoint}?${params}`)
+    }
+    return template.innerHTML
+  }
+
+  async function followLink(event: MouseEvent) {
+    const element = event.target as Element
+    const link = element.closest('a')
+    if (!link || !path) return
+    event.preventDefault()
+    const href = link.getAttribute('href') ?? ''
+    const api = window.pywebview?.api
+    if (!api) return
+    try {
+      if (/^https?:\/\//i.test(href)) await api.open_external_link(href)
+      else {
+        const target = await api.resolve_note_link(workspaceId, path, href)
+        if (!target.path.toLowerCase().endsWith('.md')) {
+          await openWorkspaceFile(workspaceId, target.path)
+          return
+        }
+        if (target.path !== path) await open(target.path)
+        if (target.fragment && path === target.path) {
+          await tick()
+          document.querySelector('.note-read')?.querySelector(`#${CSS.escape(target.fragment)}`)?.scrollIntoView()
+        }
+      }
+    } catch (reason) { error = 'Could not open the link.'; console.error(reason) }
+  }
+
+  function linkHandler(node: HTMLElement) {
+    node.addEventListener('click', followLink)
+    return { destroy: () => node.removeEventListener('click', followLink) }
+  }
 
   function setDocument(content: string) {
     const lineSeparator = content.includes('\r\n') ? '\r\n' : '\n'
@@ -54,6 +109,7 @@
 
   onMount(() => {
     void loadPreferences()
+    void window.pywebview?.api?.media_url?.(workspaceId).then((url) => { mediaUrl = url }).catch(console.error)
     view = new EditorView({ state: EditorState.create({ extensions: extensions() }), parent: host })
     function beforeUnload(event: BeforeUnloadEvent) {
       if (text !== savedText || saving) { event.preventDefault(); event.returnValue = '' }
@@ -260,5 +316,5 @@
     </div>
   {/if}
   <div class="note-content" hidden={!path || mode !== 'source'} bind:this={host}></div>
-  {#if path && mode === 'read'}<article class="note-content note-read">{@html rendered}</article>{/if}
+  {#if path && mode === 'read'}<article class="note-content note-read" use:linkHandler>{@html rendered}</article>{/if}
 </section>
