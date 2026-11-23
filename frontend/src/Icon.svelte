@@ -1,5 +1,5 @@
 <script lang="ts">
-  type IconName = 'code' | 'file' | 'file-plus' | 'file-text' | 'folder' | 'folder-plus' | 'image' | 'markdown' | 'move' | 'network' | 'pdf' | 'refresh' | 'settings' | 'sort' | 'terminal'
+  type IconName = 'arrow-left' | 'arrow-right' | 'code' | 'file' | 'file-plus' | 'file-text' | 'folder' | 'folder-plus' | 'image' | 'markdown' | 'move' | 'network' | 'panel-right' | 'pdf' | 'refresh' | 'settings' | 'sort' | 'terminal'
 
   let { name, size = 16, class: className = '' }: {
     name: IconName
@@ -21,7 +21,13 @@
   aria-hidden="true"
   focusable="false"
 >
-  {#if name === 'folder' || name === 'folder-plus'}
+  {#if name === 'arrow-left'}
+    <path d="M19 12H5" />
+    <path d="m12 19-7-7 7-7" />
+  {:else if name === 'arrow-right'}
+    <path d="M5 12h14" />
+    <path d="m12 5 7 7-7 7" />
+  {:else if name === 'folder' || name === 'folder-plus'}
     <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />
     {#if name === 'folder-plus'}
       <path d="M12 13h6" />
@@ -62,6 +68,9 @@
     {/if}
   {:else if name === 'sort'}
     <path d="M3 6h12M3 11h8M3 16h4M19 4v14m-3-3 3 3 3-3" />
+  {:else if name === 'panel-right'}
+    <rect x="3" y="3" width="18" height="18" rx="2" />
+    <path d="M15 3v18" />
   {:else if name === 'refresh'}
     <path d="M20 7v5h-5" />
     <path d="M4 17v-5h5" />

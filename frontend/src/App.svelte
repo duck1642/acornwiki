@@ -16,16 +16,20 @@
   type NoteTab = { key: string; path: string }
   type EditorPreferences = { autosave: boolean; auto_reload: boolean; reload_notice: boolean }
   type EditorStatus = { dirty: boolean; saving: boolean; conflict: boolean }
+  type FlatOutlineHeading = { id: string; label: string; level: number }
+  type OutlineHeading = FlatOutlineHeading & { children: OutlineHeading[] }
   type ThemeId = 'warm-charcoal' | 'warm-paper'
   type SurfaceMode = 'framed' | 'seamless'
+  type PageWidthPreset = '74ch' | '96ch' | '100%'
   type FileIconId = 'file' | 'markdown' | 'image' | 'pdf' | 'code'
   type WorkspaceAppearance = {
     theme: string
     surface_mode: string
+    page_width?: string
     file_icons: { set: string; extensions: Record<string, string> }
   }
-  type AppearancePatch = { theme?: ThemeId; surface_mode?: SurfaceMode }
-  type AppearanceState = { theme: ThemeId; surface_mode: SurfaceMode; file_icons: WorkspaceAppearance['file_icons'] }
+  type AppearancePatch = { theme?: ThemeId; surface_mode?: SurfaceMode; page_width?: PageWidthPreset }
+  type AppearanceState = { theme: ThemeId; surface_mode: SurfaceMode; page_width: string; file_icons: WorkspaceAppearance['file_icons'] }
   type TreeApi = {
     ping: () => Promise<string>
     get_settings: () => Promise<{ workspaces: string[]; blocked_extensions: string[]; editor: { autosave: boolean; auto_reload: boolean; reload_notice: boolean } }>
@@ -73,8 +77,14 @@
   const defaultAppearance: AppearanceState = {
     theme: 'warm-charcoal',
     surface_mode: 'framed',
+    page_width: '74ch',
     file_icons: { set: 'minimal', extensions: {} },
   }
+  const pageWidthPresets: { value: PageWidthPreset; label: string; title: string }[] = [
+    { value: '74ch', label: 'Readable', title: 'Readable width (74ch)' },
+    { value: '96ch', label: 'Wide', title: 'Wide width (96ch)' },
+    { value: '100%', label: 'Full', title: 'Full width (100%)' },
+  ]
   const defaultEditorPreferences: EditorPreferences = { autosave: false, auto_reload: true, reload_notice: true }
   const settingsTabKey = '__acornwiki_settings__'
   const imageExtensions = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg', '.avif']
@@ -96,11 +106,18 @@
   let workspaceId = $state<string | null>(null)
   let appearance = $state<AppearanceState>(defaultAppearance)
   let sessionSurface = $state<SurfaceMode | null>(null)
+  let sessionPageWidth = $state<PageWidthPreset | null>(null)
   let effectiveSurface = $derived(sessionSurface ?? appearance.surface_mode)
+  let effectivePageWidth = $derived(sessionPageWidth ?? appearance.page_width)
   let viewMenuOpen = $state(false)
   let appearanceSaving = $state(false)
   let settingsOpen = $state(false)
   let filePanelOpen = $state(true)
+  let outlineOpen = $state(true)
+  let outlineFilter = $state('')
+  let tabOutlines = $state<Record<string, FlatOutlineHeading[]>>({})
+  let expandedOutlineIds = $state<string[]>([])
+  let lastOutlineSignature = ''
   let workspacePicker: HTMLDetailsElement | undefined = $state()
   let noteTabs = $state<NoteTab[]>([])
   let activeTabKey = $state<string | null>(null)
@@ -114,8 +131,20 @@
   let tabsLocked = $state(false)
   let closeRequestActive = false
   let selectedNote = $derived(noteTabs.find((tab) => tab.key === activeTabKey)?.path ?? null)
+  let workspaceName = $derived(selectedWorkspace ? (selectedWorkspace.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? selectedWorkspace) : '')
+  let navHistory = $state<string[]>([])
+  let navIndex = $state(-1)
+  let canGoBack = $derived(navIndex > 0)
+  let canGoForward = $derived(navIndex >= 0 && navIndex < navHistory.length - 1)
   let settingsTabActive = $derived(activeTabKey === settingsTabKey)
   let openTabs = $derived(noteTabs.length > 0 || settingsTabOpen)
+  let activeOutline = $derived(activeTabKey && activeTabKey !== settingsTabKey ? (tabOutlines[activeTabKey] ?? []) : [])
+  let outlineTree = $derived(buildOutlineTree(activeOutline))
+  let filterIsActive = $derived(Boolean(outlineFilter.trim()))
+  let filteredOutline = $derived(filterOutline(outlineTree, outlineFilter.trim().toLowerCase()))
+  let expandableOutlineIds = $derived(collectExpandableIds(outlineTree))
+  let allOutlineExpanded = $derived(expandableOutlineIds.length > 0 && expandableOutlineIds.every((id) => expandedOutlineIds.includes(id)))
+  let showRightPanel = $derived(Boolean(selectedNote) && outlineOpen)
   let latestRevision = -1
   let sortMode = $state<SortMode>('alphabetic')
   let directories = $state.raw<Record<string, DirectorySnapshot>>({})
@@ -148,6 +177,7 @@
   $effect(() => {
     document.documentElement.dataset.theme = appearance.theme
     document.documentElement.dataset.surface = effectiveSurface
+    document.documentElement.style.setProperty('--page-width', effectivePageWidth)
   })
 
   $effect(() => {
@@ -293,6 +323,69 @@
     }
   }
 
+  $effect(() => {
+    const signature = `${selectedNote ?? ''}\n${activeOutline.map((heading) => `${heading.id}:${heading.level}`).join('\n')}`
+    if (signature === lastOutlineSignature) return
+    lastOutlineSignature = signature
+    expandedOutlineIds = collectExpandableIds(outlineTree)
+  })
+
+  function buildOutlineTree(headings: FlatOutlineHeading[]): OutlineHeading[] {
+    const roots: OutlineHeading[] = []
+    const parents: OutlineHeading[] = []
+    for (const heading of headings) {
+      const node: OutlineHeading = { ...heading, children: [] }
+      while (parents.length && parents[parents.length - 1].level >= node.level) parents.pop()
+      const parent = parents[parents.length - 1]
+      if (parent) parent.children.push(node)
+      else roots.push(node)
+      parents.push(node)
+    }
+    return roots
+  }
+
+  function filterOutline(nodes: OutlineHeading[], query: string): OutlineHeading[] {
+    if (!query) return nodes
+    return nodes.flatMap((node) => {
+      const children = filterOutline(node.children, query)
+      return node.label.toLowerCase().includes(query) || children.length ? [{ ...node, children }] : []
+    })
+  }
+
+  function collectExpandableIds(nodes: OutlineHeading[]): string[] {
+    const ids: string[] = []
+    for (const node of nodes) {
+      if (node.children.length) {
+        ids.push(node.id, ...collectExpandableIds(node.children))
+      }
+    }
+    return ids
+  }
+
+  function updateTabOutline(key: string, headings: FlatOutlineHeading[]) {
+    tabOutlines = { ...tabOutlines, [key]: headings }
+  }
+
+  function toggleOutlinePanel() {
+    outlineOpen = !outlineOpen
+  }
+
+  function toggleOutlineNode(id: string) {
+    expandedOutlineIds = expandedOutlineIds.includes(id)
+      ? expandedOutlineIds.filter((item) => item !== id)
+      : [...expandedOutlineIds, id]
+  }
+
+  function toggleAllOutline() {
+    expandedOutlineIds = allOutlineExpanded ? [] : [...expandableOutlineIds]
+  }
+
+  function jumpToHeading(event: MouseEvent, id: string) {
+    event.preventDefault()
+    if (!activeTabKey || activeTabKey === settingsTabKey) return
+    editors[activeTabKey]?.jumpToHeading(id)
+  }
+
   function updateTabStatus(key: string, status: EditorStatus) {
     tabStatuses = { ...tabStatuses, [key]: status }
   }
@@ -311,31 +404,82 @@
     for (const tab of noteTabs) editors[tab.key]?.scheduleExternalCheck()
   }
 
-  async function openNote(path: string, fragment?: string) {
+  function recordNavigation(path: string) {
+    if (navIndex >= 0 && navHistory[navIndex] === path) return
+    navHistory = [...navHistory.slice(0, navIndex + 1), path]
+    navIndex = navHistory.length - 1
+  }
+
+  async function openNote(path: string, fragment?: string, options?: { newTab?: boolean; fromHistory?: boolean }) {
     const requestedWorkspaceId = workspaceId
+    const newTab = Boolean(options?.newTab)
+    const fromHistory = Boolean(options?.fromHistory)
     return serializeTabAction(async () => {
       if (!requestedWorkspaceId || requestedWorkspaceId !== workspaceId || tabsLocked) return
       const key = notePathKey(path)
       const existing = noteTabs.find((tab) => tab.key === key)
       if (existing) {
         activeTabKey = existing.key
+        if (!fromHistory) recordNavigation(existing.path)
         if (fragment) {
           await tick()
           await editors[existing.key]?.navigateToFragment(fragment)
         }
         return
       }
-      const next = [...noteTabs, { key, path }]
+      const currentIndex = !newTab && activeTabKey && activeTabKey !== settingsTabKey
+        ? noteTabs.findIndex((tab) => tab.key === activeTabKey)
+        : -1
+      const currentTab = currentIndex >= 0 ? noteTabs[currentIndex] : undefined
+      const currentEditor = currentTab ? editors[currentTab.key] : undefined
+      const currentStatus = currentTab ? (currentEditor?.closeStatus() ?? tabStatuses[currentTab.key]) : undefined
+      const canReplace = Boolean(
+        currentTab &&
+        !currentEditor?.hasUnsavedWork() &&
+        !currentStatus?.dirty &&
+        !currentStatus?.saving &&
+        !currentStatus?.conflict,
+      )
+      const next = canReplace && currentTab
+        ? noteTabs.map((tab, index) => (index === currentIndex ? { key, path } : tab))
+        : [...noteTabs, { key, path }]
       if (!(await updateOpenNotes(next))) return
+      if (canReplace && currentTab) {
+        const nextStatuses = { ...tabStatuses }
+        delete nextStatuses[currentTab.key]
+        tabStatuses = nextStatuses
+        const nextOutlines = { ...tabOutlines }
+        delete nextOutlines[currentTab.key]
+        tabOutlines = nextOutlines
+      }
       noteTabs = next
       activeTabKey = key
+      if (!fromHistory) recordNavigation(path)
       await checkRegisteredNotes()
       if (fragment) await editors[key]?.navigateToFragment(fragment)
     })
   }
 
   function activateNote(key: string) {
-    if (!tabsLocked && noteTabs.some((tab) => tab.key === key)) activeTabKey = key
+    if (tabsLocked) return
+    const tab = noteTabs.find((item) => item.key === key)
+    if (!tab) return
+    activeTabKey = key
+    recordNavigation(tab.path)
+  }
+
+  function navigateBack() {
+    if (!canGoBack || tabsLocked) return
+    navIndex -= 1
+    const target = navHistory[navIndex]
+    if (target) void openNote(target, undefined, { fromHistory: true })
+  }
+
+  function navigateForward() {
+    if (!canGoForward || tabsLocked) return
+    navIndex += 1
+    const target = navHistory[navIndex]
+    if (target) void openNote(target, undefined, { fromHistory: true })
   }
 
   function chooseBulkClose(choice: 'save' | 'discard' | 'cancel') {
@@ -405,6 +549,7 @@
       }
       noteTabs = []
       tabStatuses = {}
+      tabOutlines = {}
       activeTabKey = settingsTabOpen ? settingsTabKey : null
       return true
     } finally {
@@ -435,6 +580,9 @@
         const nextStatuses = { ...tabStatuses }
         delete nextStatuses[key]
         tabStatuses = nextStatuses
+        const nextOutlines = { ...tabOutlines }
+        delete nextOutlines[key]
+        tabOutlines = nextOutlines
         activeTabKey = previousActiveKey === key
           ? (next[Math.min(previousIndex, next.length - 1)]?.key ?? (settingsTabOpen ? settingsTabKey : null))
           : (previousActiveKey && (next.some((item) => item.key === previousActiveKey) || previousActiveKey === settingsTabKey) ? previousActiveKey : (next[Math.min(previousIndex, next.length - 1)]?.key ?? null))
@@ -492,6 +640,8 @@
       workspaceMessage = ''
       selectedWorkspace = null
       workspaceId = null
+      navHistory = []
+      navIndex = -1
       appearance = { ...defaultAppearance, file_icons: { set: 'minimal', extensions: {} } }
       latestRevision = -1
       directories = {}
@@ -536,9 +686,13 @@
     for (const [extension, icon] of Object.entries(value.file_icons.extensions)) {
       if (!isFileIconId(icon)) console.warn(`Unsupported icon ID "${icon}" for "${extension}". Using that extension's minimal default icon.`)
     }
+    const rawWidth = typeof value.page_width === 'string' ? value.page_width : defaultAppearance.page_width
+    const widthMatch = /^(\d+(?:\.\d+)?)(ch|rem|px|vw|%)$/.exec(rawWidth)
+    const pageWidth = widthMatch && Number(widthMatch[1]) > 0 ? rawWidth : defaultAppearance.page_width
     return {
       theme: value.theme === 'warm-paper' ? 'warm-paper' : 'warm-charcoal',
       surface_mode: value.surface_mode === 'seamless' ? 'seamless' : 'framed',
+      page_width: pageWidth,
       file_icons: value.file_icons,
     }
   }
@@ -676,9 +830,9 @@
       } catch (error) { if (token === searchToken) searchStatus = 'Search failed.'; console.error(error) }
     }, 250)
   }
-  async function openSearchResult(path: string, isDirectory: boolean) {
+  async function openSearchResult(path: string, isDirectory: boolean, newTab = false) {
     if (!isDirectory) {
-      if (path.toLowerCase().endsWith('.md')) await openNote(path)
+      if (path.toLowerCase().endsWith('.md')) await openNote(path, undefined, { newTab })
       else await openTreeFile(path)
       return
     }
@@ -769,23 +923,23 @@
       <button class="menu-item" disabled title="This menu is not available yet">Edit</button>
       <details class="view-menu" bind:open={viewMenuOpen}>
         <summary class="menu-item">View</summary>
-        <div class="view-menu-content" role="group" aria-label="Session document surface">
+        <div class="view-menu-content" role="group" aria-label="Session view options">
           <strong>Document surface</strong>
           <button aria-pressed={effectiveSurface === 'framed'} onclick={() => { sessionSurface = 'framed'; viewMenuOpen = false }}>Framed</button>
           <button aria-pressed={effectiveSurface === 'seamless'} onclick={() => { sessionSurface = 'seamless'; viewMenuOpen = false }}>Seamless</button>
-          <button onclick={() => { sessionSurface = null; viewMenuOpen = false }}>Use workspace default</button>
+          <strong class="view-menu-divider">Page width</strong>
+          {#each pageWidthPresets as preset (preset.value)}
+            <button aria-pressed={effectivePageWidth === preset.value} title={preset.title} onclick={() => { sessionPageWidth = preset.value; viewMenuOpen = false }}>{preset.label}</button>
+          {/each}
+          <button class="view-menu-reset" onclick={() => { sessionSurface = null; sessionPageWidth = null; viewMenuOpen = false }}>Use workspace default</button>
         </div>
       </details>
       <button class="menu-item" disabled title="This menu is not available yet">Navigate</button>
       <button class="menu-item" disabled title="This menu is not available yet">Help</button>
     </div>
-    <div class="header-actions">
-      <p class="connection-status" aria-live="polite"><span class="connection-dot" class:connected={ready}></span>{message}</p>
-      <button class="icon-button" onclick={ping} disabled={!ready} aria-label="Check connection" title="Check connection"><Icon name="refresh" /></button>
-    </div>
   </header>
 
-  <div class="workspace-layout" class:files-hidden={!filePanelOpen}>
+  <div class="workspace-layout" class:files-hidden={!filePanelOpen} class:outline-open={showRightPanel}>
     <nav class="activity-bar" aria-label="Application tools">
       <button class="activity-button" class:active={filePanelOpen} onclick={toggleFilePanel} aria-label="Files" aria-pressed={filePanelOpen} title="Files"><Icon name="folder" /></button>
       <button class="activity-button" disabled aria-label="Graph view" title="Graph view is not available yet"><Icon name="network" /></button>
@@ -819,7 +973,13 @@
             <div class="tree-viewport search-results">
               {#if searchStatus}<p class="tree-status-message" role="status">{searchStatus}</p>{/if}
               {#each searchResults as result (result.path)}
-                <button class="search-result" title={result.path} onclick={() => openSearchResult(result.path, result.is_directory)}><Icon name={result.is_directory ? 'folder' : fileIconFor(result.path)} /><span>{result.path}</span></button>
+                <button
+                  class="search-result"
+                  title={result.path}
+                  onclick={(event) => openSearchResult(result.path, result.is_directory, event.ctrlKey || event.metaKey)}
+                  onmousedown={(event) => { if (event.button === 1 && !result.is_directory && result.path.toLowerCase().endsWith('.md')) event.preventDefault() }}
+                  onauxclick={(event) => { if (event.button === 1 && !result.is_directory && result.path.toLowerCase().endsWith('.md')) { event.preventDefault(); void openNote(result.path, undefined, { newTab: true }) } }}
+                ><Icon name={result.is_directory ? 'folder' : fileIconFor(result.path)} /><span>{result.path}</span></button>
               {/each}
             </div>
           {:else}
@@ -841,7 +1001,16 @@
                           <span class="tree-label" title={row.item.name}>{row.item.name}</span>
                         </button>
                       {:else if row.path.toLowerCase().endsWith('.md')}
-                        <button class="tree-file tree-note" class:selected={notePathKey(row.path) === activeTabKey} aria-current={notePathKey(row.path) === activeTabKey ? 'true' : undefined} title={row.item.name} onclick={() => openNote(row.path)} onkeydown={handleTreeKeydown}>
+                        <button
+                          class="tree-file tree-note"
+                          class:selected={notePathKey(row.path) === activeTabKey}
+                          aria-current={notePathKey(row.path) === activeTabKey ? 'true' : undefined}
+                          title={row.item.name}
+                          onclick={(event) => openNote(row.path, undefined, { newTab: event.ctrlKey || event.metaKey })}
+                          onmousedown={(event) => { if (event.button === 1) event.preventDefault() }}
+                          onauxclick={(event) => { if (event.button === 1) { event.preventDefault(); void openNote(row.path, undefined, { newTab: true }) } }}
+                          onkeydown={handleTreeKeydown}
+                        >
                           <Icon name={fileIconFor(row.item.name)} class="tree-icon note-icon" />
                           <span class="tree-label">{row.item.name}</span>
                         </button>
@@ -884,21 +1053,50 @@
 
     <section class="document-host" aria-label="Open documents">
       {#if openTabs}
-        <div class="document-tabs" role="tablist" aria-label="Open tabs">
-          {#each noteTabs as tab (tab.key)}
-            {@const tabName = tab.path.split(/[\\/]/).pop() ?? tab.path}
-            <div class="document-tab" class:active={activeTabKey === tab.key}>
-              <button class="document-tab-select" role="tab" aria-selected={activeTabKey === tab.key} title={tab.path} disabled={tabsLocked} onclick={() => activateNote(tab.key)}>
-                <span class="document-tab-title">{tabName}</span>
-                {#if tabStatuses[tab.key]?.dirty}<span class="tab-dirty-indicator" aria-label="Unsaved changes">●</span>{/if}
-              </button>
-              <button class="document-tab-close" aria-label={`Close ${tabName}`} title={`Close ${tab.path}`} disabled={tabsLocked} onclick={() => closeNoteTab(tab.key)}><span aria-hidden="true">×</span></button>
-            </div>
-          {/each}
-          {#if settingsTabOpen}
-            <div class="document-tab settings-document-tab" class:active={settingsTabActive}>
-              <button class="document-tab-select" role="tab" aria-selected={settingsTabActive} disabled={tabsLocked} onclick={openSettingsTab}>Settings</button>
-              <button class="document-tab-close" aria-label="Close Settings" title="Close Settings" disabled={tabsLocked} onclick={closeSettingsTab}><span aria-hidden="true">×</span></button>
+        <div class="document-tabs">
+          <div class="document-tabs-list" role="tablist" aria-label="Open tabs">
+            {#each noteTabs as tab (tab.key)}
+              {@const tabName = tab.path.split(/[\\/]/).pop() ?? tab.path}
+              {@const status = tabStatuses[tab.key]}
+              <div class="document-tab" class:active={activeTabKey === tab.key}>
+                <button
+                  class="document-tab-select"
+                  role="tab"
+                  aria-selected={activeTabKey === tab.key}
+                  title={tab.path}
+                  disabled={tabsLocked}
+                  onclick={() => activateNote(tab.key)}
+                  onmousedown={(event) => { if (event.button === 1) event.preventDefault() }}
+                  onauxclick={(event) => { if (event.button === 1 && !tabsLocked) { event.preventDefault(); void closeNoteTab(tab.key) } }}
+                >
+                  <span class="document-tab-title">{tabName}</span>
+                  {#if status?.conflict}
+                    <span class="tab-dirty-indicator conflict" title={status.dirty ? 'Unsaved changes and external conflict' : 'File changed externally'} aria-label={status.dirty ? 'Unsaved changes and external conflict' : 'External conflict'}>●</span>
+                  {:else if status?.dirty}
+                    <span class="tab-dirty-indicator" title="Unsaved changes" aria-label="Unsaved changes">●</span>
+                  {/if}
+                </button>
+                <button class="document-tab-close" aria-label={`Close ${tabName}`} title={`Close ${tab.path}`} disabled={tabsLocked} onclick={() => closeNoteTab(tab.key)}><span aria-hidden="true">×</span></button>
+              </div>
+            {/each}
+            {#if settingsTabOpen}
+              <div class="document-tab settings-document-tab" class:active={settingsTabActive}>
+                <button
+                  class="document-tab-select"
+                  role="tab"
+                  aria-selected={settingsTabActive}
+                  disabled={tabsLocked}
+                  onclick={openSettingsTab}
+                  onmousedown={(event) => { if (event.button === 1) event.preventDefault() }}
+                  onauxclick={(event) => { if (event.button === 1 && !tabsLocked) { event.preventDefault(); closeSettingsTab() } }}
+                >Settings</button>
+                <button class="document-tab-close" aria-label="Close Settings" title="Close Settings" disabled={tabsLocked} onclick={closeSettingsTab}><span aria-hidden="true">×</span></button>
+              </div>
+            {/if}
+          </div>
+          {#if selectedNote}
+            <div class="document-tabs-actions">
+              <button class="icon-button outline-toggle-btn" onclick={toggleOutlinePanel} aria-label="Toggle contents panel" aria-pressed={outlineOpen} title="Toggle contents panel"><Icon name="panel-right" /></button>
             </div>
           {/if}
         </div>
@@ -911,10 +1109,16 @@
               active={activeTabKey === tab.key}
               freezeEditors={tabsLocked}
               workspaceId={workspaceId ?? ''}
+              {workspaceName}
               {editorPreferences}
+              {canGoBack}
+              {canGoForward}
+              onNavigateBack={navigateBack}
+              onNavigateForward={navigateForward}
               {workspaceMessage}
               onOpenNote={openNote}
               onStatusChange={updateTabStatus}
+              onOutlineChange={updateTabOutline}
             />
           {/each}
           {#if settingsTabOpen}
@@ -938,6 +1142,11 @@
                     <button class:active={appearance.surface_mode === 'framed'} aria-pressed={appearance.surface_mode === 'framed'} disabled={!workspaceId || appearanceSaving} onclick={() => setAppearance({ surface_mode: 'framed' })}>Framed</button>
                     <button class:active={appearance.surface_mode === 'seamless'} aria-pressed={appearance.surface_mode === 'seamless'} disabled={!workspaceId || appearanceSaving} onclick={() => setAppearance({ surface_mode: 'seamless' })}>Seamless</button>
                   </div></div>
+                  <div class="settings-appearance-row"><span>Default page width</span><div class="appearance-group width-group" role="group" aria-label="Default page width">
+                    {#each pageWidthPresets as preset (preset.value)}
+                      <button class:active={appearance.page_width === preset.value} aria-pressed={appearance.page_width === preset.value} disabled={!workspaceId || appearanceSaving} title={preset.title} onclick={() => setAppearance({ page_width: preset.value })}>{preset.label}</button>
+                    {/each}
+                  </div></div>
                 </section>
                 <section class="settings-section">
                   <h2>Workspace files</h2>
@@ -952,6 +1161,13 @@
                   <label class="settings-blocked-label">Blocked extensions <textarea bind:value={blockedExtensions} rows="4" placeholder=".exe, .bat"></textarea></label>
                   <button class="text-button" onclick={saveBlockedExtensions}>Save extensions</button>
                   {#if blockedMessage}<p role="status" class="settings-message">{blockedMessage}</p>{/if}
+                </section>
+                <section class="settings-section">
+                  <h2>Connection</h2>
+                  <div class="settings-connection-row">
+                    <p class="connection-status" aria-live="polite"><span class="connection-dot" class:connected={ready}></span>{message}</p>
+                    <button class="text-button" onclick={ping} disabled={!ready}>Check connection</button>
+                  </div>
                 </section>
               </div>
             </section>
@@ -968,6 +1184,27 @@
         </section>
       {/if}
     </section>
+
+    {#if showRightPanel}
+      <aside class="note-outline" aria-label="Contents">
+        <div class="outline-heading">
+          <h2 class="outline-title">Contents</h2>
+          <button class="outline-collapse-all" aria-label={filterIsActive || allOutlineExpanded ? 'Collapse all headings' : 'Expand all headings'} title={filterIsActive ? 'Clear the filter to change heading expansion' : allOutlineExpanded ? 'Collapse all headings' : 'Expand all headings'} aria-expanded={filterIsActive || allOutlineExpanded} disabled={expandableOutlineIds.length === 0 || filterIsActive} onclick={toggleAllOutline}>{filterIsActive || allOutlineExpanded ? '−' : '+'}</button>
+        </div>
+        <input class="outline-filter" type="search" aria-label="Filter headings" placeholder="Filter headings..." bind:value={outlineFilter} />
+        {#if activeOutline.length === 0}
+          <p class="outline-empty">No headings in this note.</p>
+        {:else if filteredOutline.length === 0}
+          <p class="outline-empty">No headings match this filter.</p>
+        {:else}
+          <nav class="outline-nav" aria-label="Note headings">
+            <ul>
+              {@render renderHeadings(filteredOutline, 0, filterIsActive)}
+            </ul>
+          </nav>
+        {/if}
+      </aside>
+    {/if}
   </div>
   <footer class="status-bar">
     <span>{selectedWorkspace ?? 'No workspace selected'}</span>
@@ -995,3 +1232,21 @@
     </div>
   {/if}
 </main>
+
+{#snippet renderHeadings(nodes: OutlineHeading[], depth: number, filterIsActive: boolean)}
+  {#each nodes as heading (heading.id)}
+    {@const hasChildren = heading.children.length > 0}
+    {@const expanded = filterIsActive || expandedOutlineIds.includes(heading.id)}
+    <li class="outline-row" style={`padding-left: ${depth * 14}px`}>
+      {#if hasChildren}
+        <button class="outline-caret" aria-label={expanded ? `Collapse ${heading.label}` : `Expand ${heading.label}`} aria-expanded={expanded} disabled={filterIsActive} onclick={() => toggleOutlineNode(heading.id)}>{expanded ? '▾' : '▸'}</button>
+      {:else}
+        <span class="outline-caret-spacer" aria-hidden="true"></span>
+      {/if}
+      <a class="outline-link outline-level-{heading.level}" href={`#${heading.id}`} onclick={(event) => jumpToHeading(event, heading.id)} title={heading.label}>{heading.label}</a>
+    </li>
+    {#if hasChildren && expanded}
+      {@render renderHeadings(heading.children, depth + 1, filterIsActive)}
+    {/if}
+  {/each}
+{/snippet}

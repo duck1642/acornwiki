@@ -187,7 +187,7 @@ const net = require('node:net');
     await page.keyboard.press('Control+s');
     await page.keyboard.type(' later');
     await page.evaluate(() => window.releaseSave());
-    await page.getByText('Unsaved',{exact:true}).waitFor();
+    await page.locator('.document-tab.active .tab-dirty-indicator').waitFor();
     await page.waitForFunction(() => window.disk() === '# Remote local autosave first');
     assert.equal(await editorFor('note.md').innerText(), '# Remote local autosave first later');
     assert.equal(await page.getByText('Saved.', {exact:true}).count(), 0);

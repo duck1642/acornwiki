@@ -4,32 +4,47 @@
   import { EditorView } from '@codemirror/view'
   import { basicSetup } from 'codemirror'
   import { markdown } from '@codemirror/lang-markdown'
-  import { ensureSyntaxTree } from '@codemirror/language'
+  import { ensureSyntaxTree, HighlightStyle, syntaxHighlighting } from '@codemirror/language'
+  import { tags } from '@lezer/highlight'
   import { marked } from 'marked'
   import DOMPurify from 'dompurify'
+  import Icon from './Icon.svelte'
   import { openWorkspaceFile } from './fileActions'
 
   type EditorPreferences = { autosave: boolean; auto_reload: boolean; reload_notice: boolean }
   type EditorStatus = { dirty: boolean; saving: boolean; conflict: boolean }
+  type FlatOutlineHeading = { id: string; label: string; level: number }
   let {
     workspaceId,
+    workspaceName = '',
     tabKey,
     notePath,
     active,
     freezeEditors = false,
     editorPreferences,
+    canGoBack = false,
+    canGoForward = false,
+    onNavigateBack,
+    onNavigateForward,
     onOpenNote,
     onStatusChange,
+    onOutlineChange,
     workspaceMessage = '',
   }: {
     workspaceId: string
+    workspaceName?: string
     tabKey: string
     notePath: string
     active: boolean
     freezeEditors?: boolean
     editorPreferences: EditorPreferences
-    onOpenNote: (path: string, fragment?: string) => void | Promise<void>
+    canGoBack?: boolean
+    canGoForward?: boolean
+    onNavigateBack?: () => void
+    onNavigateForward?: () => void
+    onOpenNote: (path: string, fragment?: string, options?: { newTab?: boolean }) => void | Promise<void>
     onStatusChange: (key: string, status: EditorStatus) => void
+    onOutlineChange?: (key: string, headings: FlatOutlineHeading[]) => void
     workspaceMessage?: string
   } = $props()
   let host: HTMLDivElement
@@ -59,26 +74,32 @@
   let saveTimer: ReturnType<typeof setTimeout> | undefined
   let savePromise: Promise<boolean> | undefined
   let mediaUrl = $state('')
-  let outlineFilter = $state('')
   let dirty = $derived(text !== savedText)
   let rendered = $derived(renderMarkdown(text, path, mediaUrl))
   let outline = $derived(extractOutline(rendered))
-  let filterIsActive = $derived(Boolean(outlineFilter.trim()))
+  let breadcrumb = $derived(buildBreadcrumb(path, workspaceName))
 
-  type FlatOutlineHeading = { id: string; label: string; level: number }
-  type OutlineHeading = FlatOutlineHeading & { children: OutlineHeading[] }
-
-  let outlineOpen = $state(true)
-  let expandedOutlineIds = $state<string[]>([])
-  let outlineTree = $derived(buildOutlineTree(outline))
-  let filteredOutline = $derived(filterOutline(outlineTree, outlineFilter.trim().toLowerCase()))
-  let expandableOutlineIds = $derived(collectExpandableIds(outlineTree))
-  let allOutlineExpanded = $derived(expandableOutlineIds.length > 0 && expandableOutlineIds.every((id) => expandedOutlineIds.includes(id)))
+  function buildBreadcrumb(note: string | null, rootName: string): { prefix: string; file: string } {
+    if (!note) return { prefix: '', file: '' }
+    const parts = note.replace(/\\/g, '/').split('/').filter(Boolean)
+    const file = parts.pop() ?? note
+    const dirs = rootName ? [rootName, ...parts] : parts
+    return {
+      prefix: dirs.length ? `${dirs.join(' / ')} / ` : '',
+      file,
+    }
+  }
 
   $effect(() => {
     const key = tabKey
     const status = { dirty, saving, conflict }
     untrack(() => onStatusChange(key, status))
+  })
+
+  $effect(() => {
+    const key = tabKey
+    const headings = outline
+    untrack(() => onOutlineChange?.(key, headings))
   })
 
   $effect(() => {
@@ -97,15 +118,6 @@
     ] })
   })
 
-  $effect(() => {
-    const signature = `${path ?? ''}\n${outline.map((heading) => `${heading.id}:${heading.level}`).join('\n')}`
-    if (signature === lastOutlineSignature) return
-    lastOutlineSignature = signature
-    expandedOutlineIds = collectExpandableIds(outlineTree)
-  })
-
-  let lastOutlineSignature = ''
-
   function extractOutline(html: string): FlatOutlineHeading[] {
     if (!html) return []
     const template = document.createElement('template')
@@ -115,54 +127,7 @@
       .filter((heading) => heading.id && heading.label)
   }
 
-  function buildOutlineTree(headings: FlatOutlineHeading[]): OutlineHeading[] {
-    const roots: OutlineHeading[] = []
-    const parents: OutlineHeading[] = []
-    for (const heading of headings) {
-      const node: OutlineHeading = { ...heading, children: [] }
-      while (parents.length && parents[parents.length - 1].level >= node.level) parents.pop()
-      const parent = parents[parents.length - 1]
-      if (parent) parent.children.push(node)
-      else roots.push(node)
-      parents.push(node)
-    }
-    return roots
-  }
-
-  function filterOutline(nodes: OutlineHeading[], query: string): OutlineHeading[] {
-    if (!query) return nodes
-    return nodes.flatMap((node) => {
-      const children = filterOutline(node.children, query)
-      return node.label.toLowerCase().includes(query) || children.length ? [{ ...node, children }] : []
-    })
-  }
-
-  function collectExpandableIds(nodes: OutlineHeading[]): string[] {
-    const ids: string[] = []
-    for (const node of nodes) {
-      if (node.children.length) {
-        ids.push(node.id, ...collectExpandableIds(node.children))
-      }
-    }
-    return ids
-  }
-
-  function toggleOutlineNode(id: string) {
-    expandedOutlineIds = expandedOutlineIds.includes(id)
-      ? expandedOutlineIds.filter((item) => item !== id)
-      : [...expandedOutlineIds, id]
-  }
-
-  function toggleAllOutline() {
-    expandedOutlineIds = allOutlineExpanded ? [] : [...expandableOutlineIds]
-  }
-
-  function toggleOutlinePanel() {
-    outlineOpen = !outlineOpen
-  }
-
-  function jumpToHeading(event: MouseEvent, id: string) {
-    event.preventDefault()
+  export function jumpToHeading(id: string) {
     if (mode === 'read') {
       panel.querySelector('.note-read')?.querySelector(`#${CSS.escape(id)}`)?.scrollIntoView({ block: 'start' })
       return
@@ -216,10 +181,12 @@
   }
 
   async function followLink(event: MouseEvent) {
+    if (event.type === 'auxclick' && event.button !== 1) return
     const element = event.target as Element
     const link = element.closest('a')
     if (!link || !path) return
     event.preventDefault()
+    const newTab = event.button === 1 || event.ctrlKey || event.metaKey
     const href = link.getAttribute('href') ?? ''
     const api = window.pywebview?.api
     if (!api) return
@@ -237,15 +204,27 @@
           await openWorkspaceFile(workspaceId, target.path)
           return
         }
-        if (target.path !== path) await onOpenNote(target.path, target.fragment)
+        if (target.path !== path) await onOpenNote(target.path, target.fragment, { newTab })
         else if (target.fragment) await navigateToFragment(target.fragment)
       }
     } catch (reason) { error = 'Could not open the link.'; console.error(reason) }
   }
 
+  function linkMousedown(event: MouseEvent) {
+    if (event.button === 1 && (event.target as Element).closest('a')) event.preventDefault()
+  }
+
   function linkHandler(node: HTMLElement) {
     node.addEventListener('click', followLink)
-    return { destroy: () => node.removeEventListener('click', followLink) }
+    node.addEventListener('auxclick', followLink)
+    node.addEventListener('mousedown', linkMousedown)
+    return {
+      destroy: () => {
+        node.removeEventListener('click', followLink)
+        node.removeEventListener('auxclick', followLink)
+        node.removeEventListener('mousedown', linkMousedown)
+      },
+    }
   }
 
   function setDocument(content: string) {
@@ -254,8 +233,27 @@
     text = content
   }
 
+  const markdownHighlightStyle = HighlightStyle.define([
+    { tag: tags.heading, color: 'var(--ink)', fontWeight: '700' },
+    { tag: tags.heading1, color: 'var(--ink)', fontWeight: '700' },
+    { tag: tags.heading2, color: 'var(--ink)', fontWeight: '700' },
+    { tag: tags.heading3, color: 'var(--ink)', fontWeight: '650' },
+    { tag: tags.strong, color: 'var(--ink)', fontWeight: '700' },
+    { tag: tags.emphasis, color: 'var(--ink)', fontStyle: 'italic' },
+    { tag: tags.strikethrough, color: 'var(--ink-muted)', textDecoration: 'line-through' },
+    { tag: tags.link, color: 'var(--link)', textDecoration: 'underline' },
+    { tag: tags.url, color: 'var(--link)' },
+    { tag: tags.quote, color: 'var(--ink-muted)', fontStyle: 'italic' },
+    { tag: tags.monospace, color: 'var(--accent)' },
+    { tag: [tags.processingInstruction, tags.punctuation, tags.meta, tags.contentSeparator], color: 'var(--ink-faint)' },
+    { tag: [tags.keyword, tags.operator, tags.typeName, tags.labelName], color: 'var(--warn)' },
+    { tag: [tags.string, tags.special(tags.string)], color: 'var(--accent)' },
+    { tag: [tags.comment], color: 'var(--ink-faint)', fontStyle: 'italic' },
+    { tag: [tags.number, tags.bool, tags.atom], color: 'var(--link)' },
+  ])
+
   function extensions() {
-    return [basicSetup, markdown(), EditorView.lineWrapping, editableCompartment.of(EditorView.editable.of(!prompt && !freezeEditors)), readOnlyCompartment.of(EditorState.readOnly.of(prompt || freezeEditors)), EditorView.updateListener.of((update) => {
+    return [basicSetup, markdown(), syntaxHighlighting(markdownHighlightStyle), EditorView.lineWrapping, editableCompartment.of(EditorView.editable.of(!prompt && !freezeEditors)), readOnlyCompartment.of(EditorState.readOnly.of(prompt || freezeEditors)), EditorView.updateListener.of((update) => {
       if (update.docChanged) {
         text = update.state.sliceDoc()
         message = ''
@@ -327,7 +325,6 @@
       if (token !== operation) return
       clearTimeout(saveTimer)
       path = note.path
-      outlineFilter = ''
       version = note.version
       savedText = note.content
       setDocument(note.content)
@@ -447,12 +444,17 @@
 
 <section class="note-panel" class:inactive={!active} aria-label="Markdown editor" aria-hidden={!active} inert={!active} bind:this={panel} data-note-path={notePath}>
   <div class="note-toolbar">
-    <strong>{path ?? 'Select a Markdown file'}</strong>
-    {#if path}<span>{dirty ? 'Unsaved' : 'Saved'}</span>
+    <div class="note-nav-buttons">
+      <button class="icon-button note-nav-btn" onclick={() => onNavigateBack?.()} disabled={!canGoBack || freezeEditors} aria-label="Navigate back" title="Navigate back"><Icon name="arrow-left" size={14} /></button>
+      <button class="icon-button note-nav-btn" onclick={() => onNavigateForward?.()} disabled={!canGoForward || freezeEditors} aria-label="Navigate forward" title="Navigate forward"><Icon name="arrow-right" size={14} /></button>
+    </div>
+    <div class="note-breadcrumb" title={path ?? ''}>
+      {#if breadcrumb.prefix}<span class="note-breadcrumb-dir">{breadcrumb.prefix}</span>{/if}{#if breadcrumb.file}<span class="note-breadcrumb-file">{breadcrumb.file}</span>{/if}
+    </div>
+    {#if path}
       <button onclick={() => mode = 'source'} aria-pressed={mode === 'source'}>Source</button>
       <button onclick={() => mode = 'read'} aria-pressed={mode === 'read'}>Read</button>
       <button onclick={() => save()} disabled={!dirty || saving || conflict || freezeEditors || prompt}>Save</button>
-      <button class="outline-toggle-btn" onclick={toggleOutlinePanel} aria-label="Toggle contents panel" aria-pressed={outlineOpen} title="Toggle contents panel">Contents</button>
       <details class="note-more-menu">
         <summary aria-label="More note actions" title="More note actions">⋯</summary>
         <div class="note-more-content">
@@ -462,39 +464,17 @@
       </details>
     {/if}
   </div>
-  <div class="note-body-layout">
-    <div class="note-scroll">
-      <div class="note-sheet">
-        {#if !path}
-          <div class="note-empty-state">
-            <h2>No note selected</h2>
-            <p>Choose a Markdown file from the workspace tree.</p>
-          </div>
-        {/if}
-        <div class="note-content" hidden={!path || mode !== 'source'} bind:this={host}></div>
-        {#if path && mode === 'read'}<article class="note-content note-read" use:linkHandler>{@html rendered}</article>{/if}
-      </div>
-    </div>
-    {#if path && outlineOpen}
-      <aside class="note-outline" aria-label="Contents">
-        <div class="outline-heading">
-          <h2 class="outline-title">Contents</h2>
-          <button class="outline-collapse-all" aria-label={filterIsActive || allOutlineExpanded ? 'Collapse all headings' : 'Expand all headings'} title={filterIsActive ? 'Clear the filter to change heading expansion' : allOutlineExpanded ? 'Collapse all headings' : 'Expand all headings'} aria-expanded={filterIsActive || allOutlineExpanded} disabled={expandableOutlineIds.length === 0 || filterIsActive} onclick={toggleAllOutline}>{filterIsActive || allOutlineExpanded ? '−' : '+'}</button>
+  <div class="note-scroll">
+    <div class="note-sheet">
+      {#if !path}
+        <div class="note-empty-state">
+          <h2>No note selected</h2>
+          <p>Choose a Markdown file from the workspace tree.</p>
         </div>
-        <input class="outline-filter" type="search" aria-label="Filter headings" placeholder="Filter headings..." bind:value={outlineFilter} />
-        {#if outline.length === 0}
-          <p class="outline-empty">No headings in this note.</p>
-        {:else if filteredOutline.length === 0}
-          <p class="outline-empty">No headings match this filter.</p>
-        {:else}
-          <nav class="outline-nav" aria-label="Note headings">
-            <ul>
-              {@render renderHeadings(filteredOutline, 0, filterIsActive)}
-            </ul>
-          </nav>
-        {/if}
-      </aside>
-    {/if}
+      {/if}
+      <div class="note-content" hidden={!path || mode !== 'source'} bind:this={host}></div>
+      {#if path && mode === 'read'}<article class="note-content note-read" use:linkHandler>{@html rendered}</article>{/if}
+    </div>
   </div>
   {#if message || error || conflict || prompt || workspaceMessage}
     <div class="note-notices">
@@ -521,21 +501,3 @@
     </div>
   {/if}
 </section>
-
-{#snippet renderHeadings(nodes: OutlineHeading[], depth: number, filterIsActive: boolean)}
-  {#each nodes as heading (heading.id)}
-    {@const hasChildren = heading.children.length > 0}
-    {@const expanded = filterIsActive || expandedOutlineIds.includes(heading.id)}
-    <li class="outline-row" style={`padding-left: ${depth * 14}px`}>
-      {#if hasChildren}
-        <button class="outline-caret" aria-label={expanded ? `Collapse ${heading.label}` : `Expand ${heading.label}`} aria-expanded={expanded} disabled={filterIsActive} onclick={() => toggleOutlineNode(heading.id)}>{expanded ? '▾' : '▸'}</button>
-      {:else}
-        <span class="outline-caret-spacer" aria-hidden="true"></span>
-      {/if}
-      <a class="outline-link outline-level-{heading.level}" href={`#${heading.id}`} onclick={(event) => jumpToHeading(event, heading.id)} title={heading.label}>{heading.label}</a>
-    </li>
-    {#if hasChildren && expanded}
-      {@render renderHeadings(heading.children, depth + 1, filterIsActive)}
-    {/if}
-  {/each}
-{/snippet}
