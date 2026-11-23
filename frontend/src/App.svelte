@@ -13,11 +13,22 @@
     | { kind: 'item'; path: string; item: FileTreeItem; depth: number }
     | { kind: 'status'; path: string; message: string; depth: number; error: boolean }
   type NoteSnapshot = { path: string; content: string; version: string }
+  type ThemeId = 'warm-charcoal' | 'warm-paper'
+  type SurfaceMode = 'framed' | 'seamless'
+  type FileIconId = 'file' | 'markdown' | 'image' | 'pdf' | 'code'
+  type WorkspaceAppearance = {
+    theme: string
+    surface_mode: string
+    file_icons: { set: string; extensions: Record<string, string> }
+  }
+  type AppearancePatch = { theme?: ThemeId; surface_mode?: SurfaceMode }
+  type AppearanceState = { theme: ThemeId; surface_mode: SurfaceMode; file_icons: WorkspaceAppearance['file_icons'] }
   type TreeApi = {
     ping: () => Promise<string>
     get_settings: () => Promise<{ workspaces: string[]; blocked_extensions: string[]; editor: { autosave: boolean; auto_reload: boolean; reload_notice: boolean } }>
     set_editor_preference: (name: string, value: boolean) => Promise<void>
-    get_workspace_settings: (path: string) => Promise<Record<string, unknown>>
+    get_workspace_settings: (path: string) => Promise<{ automatic_link_update: boolean; appearance: WorkspaceAppearance }>
+    set_workspace_appearance: (workspace_id: string, appearance: AppearancePatch) => Promise<void>
     open_workspace: (path: string) => Promise<TreeSnapshot>
     get_tree: (id: string) => Promise<TreeSnapshot>
     set_directory_visible: (id: string, path: string, visible: boolean) => Promise<TreeSnapshot>
@@ -49,9 +60,18 @@
 
 <script lang="ts">
   import { onMount, tick } from 'svelte'
+  import Icon from './Icon.svelte'
   import NoteEditor from './NoteEditor.svelte'
   import { openWorkspaceFile } from './fileActions'
   import { planMoveLinks } from './markdownLinkPlan'
+
+  const defaultAppearance: AppearanceState = {
+    theme: 'warm-charcoal',
+    surface_mode: 'framed',
+    file_icons: { set: 'minimal', extensions: {} },
+  }
+  const imageExtensions = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg', '.avif']
+  const codeExtensions = ['.json', '.yaml', '.yml', '.toml', '.py', '.ts', '.tsx', '.js', '.jsx', '.css', '.html', '.sh', '.sql']
 
   let ready = $state(false)
   let message = $state('Waiting for backend...')
@@ -63,6 +83,8 @@
   let loadingWorkspace = $state(false)
   let selectedWorkspace = $state<string | null>(null)
   let workspaceId = $state<string | null>(null)
+  let appearance = $state<AppearanceState>(defaultAppearance)
+  let appearanceSaving = $state(false)
   let editor: NoteEditor | undefined = $state()
   let selectedNote = $state<string | null>(null)
   let latestRevision = -1
@@ -88,6 +110,10 @@
   let startRow = $derived(Math.max(0, Math.min(visibleTree.length, Math.floor(scrollTop / rowHeight) - overscan)))
   let endRow = $derived(Math.min(visibleTree.length, Math.ceil((scrollTop + viewportHeight) / rowHeight) + overscan))
   let renderedRows = $derived(visibleTree.slice(startRow, endRow))
+  $effect(() => {
+    document.documentElement.dataset.theme = appearance.theme
+    document.documentElement.dataset.surface = appearance.surface_mode
+  })
 
   $effect(() => {
     const refreshing = new Set(Object.values(directories)
@@ -191,12 +217,14 @@
   async function selectWorkspace(path: string) {
     const api = window.pywebview?.api
     if (!api) return
+    if (appearanceSaving) return
     if (editor && !(await editor.prepareClose())) return
     loadingWorkspace = true
     workspaceMessage = ''
     selectedWorkspace = null
     selectedNote = null
     workspaceId = null
+    appearance = { ...defaultAppearance, file_icons: { set: 'minimal', extensions: {} } }
     latestRevision = -1
     directories = {}
     expandedFolders = []
@@ -206,16 +234,72 @@
     sortMode = 'alphabetic'
     try {
       const preferences = await api.get_workspace_settings(path)
-      automaticLinkUpdate = preferences.automatic_link_update !== false
       const snapshot = await api.open_workspace(path)
       workspaceId = snapshot.workspace_id
       selectedWorkspace = path
+      automaticLinkUpdate = preferences.automatic_link_update !== false
+      appearance = normalizeAppearance(preferences.appearance)
       applySnapshot(snapshot)
       await syncTree()
     } catch (error) {
       workspaceMessage = `Could not open workspace: ${path}. Check the folder and its settings.`
       console.error(error)
     } finally { loadingWorkspace = false }
+  }
+  function normalizeAppearance(value: WorkspaceAppearance): AppearanceState {
+    if (value.theme !== 'warm-charcoal' && value.theme !== 'warm-paper') {
+      console.warn(`Unsupported workspace theme "${value.theme}". Using Warm Charcoal in the interface.`)
+    }
+    if (value.surface_mode !== 'framed' && value.surface_mode !== 'seamless') {
+      console.warn(`Unsupported workspace surface "${value.surface_mode}". Using Framed in the interface.`)
+    }
+    if (value.file_icons.set !== 'minimal') {
+      console.warn(`Unsupported workspace file icon set "${value.file_icons.set}". Using the minimal icon set in the interface.`)
+    }
+    for (const [extension, icon] of Object.entries(value.file_icons.extensions)) {
+      if (!isFileIconId(icon)) console.warn(`Unsupported icon ID "${icon}" for "${extension}". Using that extension's minimal default icon.`)
+    }
+    return {
+      theme: value.theme === 'warm-paper' ? 'warm-paper' : 'warm-charcoal',
+      surface_mode: value.surface_mode === 'seamless' ? 'seamless' : 'framed',
+      file_icons: value.file_icons,
+    }
+  }
+  function isFileIconId(value: string): value is FileIconId {
+    return value === 'file' || value === 'markdown' || value === 'image' || value === 'pdf' || value === 'code'
+  }
+  function minimalFileIcon(extension: string): FileIconId {
+    if (extension === '.md' || extension === '.markdown') return 'markdown'
+    if (imageExtensions.includes(extension)) return 'image'
+    if (extension === '.pdf') return 'pdf'
+    if (codeExtensions.includes(extension)) return 'code'
+    return 'file'
+  }
+  function fileIconFor(name: string): FileIconId {
+    const dot = name.lastIndexOf('.')
+    const extension = dot >= 0 ? name.slice(dot).toLowerCase() : ''
+    const override = Object.entries(appearance.file_icons.extensions)
+      .find(([key]) => key.toLowerCase() === extension)?.[1]
+    return override && isFileIconId(override) ? override : minimalFileIcon(extension)
+  }
+  async function setAppearance(patch: AppearancePatch) {
+    const api = window.pywebview?.api
+    const id = workspaceId
+    if (!api || !id || appearanceSaving) return
+    const previous = { ...appearance }
+    appearanceSaving = true
+    appearance = { ...appearance, ...patch }
+    workspaceMessage = ''
+    try {
+      await api.set_workspace_appearance(id, patch)
+      if (id === workspaceId) workspaceMessage = 'Appearance saved.'
+    } catch (error) {
+      if (id === workspaceId) {
+        appearance = previous
+        workspaceMessage = 'Could not save appearance settings.'
+      }
+      console.error(error)
+    } finally { appearanceSaving = false }
   }
   async function toggleFolder(path: string) {
     const api = window.pywebview?.api
@@ -356,68 +440,125 @@
 </script>
 
 <main class="app-shell">
-  <h1>acornwiki</h1>
-  <button onclick={ping} disabled={!ready}>Test connection</button>
-  <p aria-live="polite">{message}</p>
-  <details>
-    <summary>Blocked file extensions</summary>
-    <p>Files with these extensions are shown in the tree but cannot be opened directly.</p>
-    <label>Extensions <textarea bind:value={blockedExtensions} rows="3"></textarea></label>
-    <button onclick={saveBlockedExtensions}>Save extensions</button>
-    {#if blockedMessage}<p role="status">{blockedMessage}</p>{/if}
-  </details>
-  <h2>Workspaces</h2>
-  {#if workspacesLoaded && workspaces.length === 0}<p>No saved workspaces.</p>{/if}
-  {#if workspaces.length > 0}
-    <ul class="workspace-list">{#each workspaces as workspace}<li><button onclick={() => selectWorkspace(workspace)} disabled={loadingWorkspace || moving}>{workspace}</button></li>{/each}</ul>
-  {/if}
+  <header class="app-header">
+    <div class="brand-lockup">
+      <img src="/favicon.svg" alt="" width="28" height="28" />
+      <h1>acornwiki</h1>
+    </div>
+    <div class="header-actions">
+      <p class="connection-status" aria-live="polite">
+        <span class="connection-dot" class:connected={ready}></span>
+        {message}
+      </p>
+      <button class="icon-button" onclick={ping} disabled={!ready} aria-label="Check connection" title="Check connection">
+        <Icon name="refresh" />
+      </button>
+      <details class="settings-menu">
+        <summary>Settings</summary>
+        <div class="settings-content">
+          <strong>Blocked file extensions</strong>
+          <p>Files with these extensions are shown in the tree but cannot be opened directly.</p>
+          <label>Extensions <textarea bind:value={blockedExtensions} rows="3"></textarea></label>
+          <button class="text-button" onclick={saveBlockedExtensions}>Save extensions</button>
+          {#if blockedMessage}<p role="status">{blockedMessage}</p>{/if}
+        </div>
+      </details>
+    </div>
+  </header>
+
+  <nav class="workspace-switcher" aria-label="Workspaces">
+    <div class="workspace-switcher-label">Workspaces</div>
+    <div class="workspace-list">
+      {#if workspacesLoaded && workspaces.length === 0}<span class="empty-workspaces">No saved workspaces.</span>{/if}
+      {#each workspaces as workspace}
+        <button class="workspace-choice" class:selected={selectedWorkspace === workspace} aria-current={selectedWorkspace === workspace ? 'page' : undefined} onclick={() => selectWorkspace(workspace)} disabled={loadingWorkspace || moving || appearanceSaving} title={workspace}>{workspace}</button>
+      {/each}
+    </div>
+  </nav>
+
   {#if selectedWorkspace}
-    <p>Selected workspace: <code>{selectedWorkspace}</code></p>
-    <div class="workspace-layout">
-    <section class="file-tree" aria-label="Workspace file tree" inert={moving}>
-      <div class="tree-heading">
-        <h2>File tree</h2>
-        <button onclick={() => refreshTree(null)}>Refresh</button>
-        <label>Sort <select value={sortMode} onchange={changeSortMode}><option value="alphabetic">Alphabetical</option><option value="modified">Modified</option></select></label>
-      </div>
-      <div class="tree-heading">
-        <label>Destination <select bind:value={creationFolder}><option value="">Workspace root</option>{#each expandedFolders as folder}<option value={folder}>{folder}</option>{/each}</select></label>
-        <button disabled={creating} onclick={() => createEntry('note')}>New note</button>
-        <button disabled={creating} onclick={() => createEntry('folder')}>New folder</button>
-      </div>
-      {#if watcherError}<p role="alert">File watcher: {watcherError}. Refresh manually.</p>{/if}
-      {#if rootDirectory?.error}<p role="alert">{rootDirectory.error} <button onclick={() => refreshTree('')}>Retry</button></p>{/if}
-      {#if rootDirectory?.loading && (!rootDirectory.items || delayedRefreshes.includes(''))}<p aria-live="polite">{rootDirectory.items ? 'Refreshing...' : 'Loading workspace...'}</p>{/if}
-      {#if rootDirectory?.items?.length === 0 && !rootDirectory.loading}<p>This workspace is empty.</p>{/if}
-      <div class="tree-viewport" bind:this={viewport} bind:clientHeight={viewportHeight} tabindex="-1" aria-label="Scrollable file tree" onscroll={handleTreeScroll}>
-        <ul class="tree-list">
-          <li aria-hidden="true" style={`height: ${startRow * rowHeight}px`}></li>
-          {#each renderedRows as row, index (row.kind === 'item' ? `item:${row.path}` : `status:${row.path}`)}
-            <li class="tree-entry" data-row-index={startRow + index}>
-              {#if row.kind === 'item'}
-                <div class="tree-row" style={`padding-left: ${8 + row.depth * 20}px`}>
-                  {#if row.item.is_directory}
-                    <button class="tree-folder" onclick={() => toggleFolder(row.path)} onkeydown={handleTreeKeydown} aria-expanded={expandedFolders.includes(row.path)}>
-                      <span aria-hidden="true">{expandedFolders.includes(row.path) ? '▾' : '▸'}</span><span title={row.item.name}>{row.item.name}</span>
-                    </button>
-                  {:else if row.path.toLowerCase().endsWith('.md')}
-                    <button class="tree-file tree-note" class:selected={selectedNote === row.path} aria-current={selectedNote === row.path ? 'true' : undefined} title={row.item.name} onclick={() => editor?.open(row.path)} onkeydown={handleTreeKeydown}>{row.item.name}</button>
-                  {:else}<button class="tree-file" title={row.item.name} onclick={() => openTreeFile(row.path)} onkeydown={handleTreeKeydown}>{row.item.name}</button>{/if}
-                  <button aria-label={`Move or rename ${row.item.name}`} onclick={() => moveEntry(row.path)} onkeydown={handleTreeKeydown}>Move</button>
-                </div>
-              {:else}
-                <div class="tree-status" style={`padding-left: ${8 + row.depth * 20}px`}>
-                  <span title={row.message}>{row.message}</span> {#if row.error}<button onclick={() => refreshTree(row.path)} onkeydown={handleTreeKeydown}>Retry</button>{/if}
-                </div>
-              {/if}
-            </li>
-          {/each}
-          <li aria-hidden="true" style={`height: ${(visibleTree.length - endRow) * rowHeight}px`}></li>
-        </ul>
+    <section class="workspace-view" aria-label="Workspace">
+      <header class="workspace-toolbar">
+        <div class="workspace-title">
+          <span>Workspace</span>
+          <strong title={selectedWorkspace}>{selectedWorkspace}</strong>
+        </div>
+        <div class="appearance-controls">
+          <div class="appearance-group" role="group" aria-label="Theme">
+            <button class:active={appearance.theme === 'warm-charcoal'} aria-pressed={appearance.theme === 'warm-charcoal'} disabled={appearanceSaving} onclick={() => setAppearance({ theme: 'warm-charcoal' })}>Warm Charcoal</button>
+            <button class:active={appearance.theme === 'warm-paper'} aria-pressed={appearance.theme === 'warm-paper'} disabled={appearanceSaving} onclick={() => setAppearance({ theme: 'warm-paper' })}>Warm Paper</button>
+          </div>
+          <div class="appearance-group surface-group" role="group" aria-label="Document surface">
+            <button class:active={appearance.surface_mode === 'framed'} aria-pressed={appearance.surface_mode === 'framed'} disabled={appearanceSaving} onclick={() => setAppearance({ surface_mode: 'framed' })}>Framed</button>
+            <button class:active={appearance.surface_mode === 'seamless'} aria-pressed={appearance.surface_mode === 'seamless'} disabled={appearanceSaving} onclick={() => setAppearance({ surface_mode: 'seamless' })}>Seamless</button>
+          </div>
+        </div>
+      </header>
+
+      <div class="workspace-layout">
+        <aside class="file-tree" aria-label="Workspace file tree" inert={moving}>
+          <div class="tree-heading">
+            <h2>Files</h2>
+            <div class="tree-actions">
+              <button class="icon-button" onclick={() => refreshTree(null)} aria-label="Refresh file tree" title="Refresh file tree"><Icon name="refresh" /></button>
+              <button class="icon-button" disabled={creating} onclick={() => createEntry('note')} aria-label="New note" title="New note"><Icon name="file-plus" /></button>
+              <button class="icon-button" disabled={creating} onclick={() => createEntry('folder')} aria-label="New folder" title="New folder"><Icon name="folder-plus" /></button>
+            </div>
+          </div>
+          <div class="tree-options">
+            <label>Sort <select value={sortMode} onchange={changeSortMode}><option value="alphabetic">Alphabetical</option><option value="modified">Modified</option></select></label>
+            <label>New item in <select aria-label="Destination" bind:value={creationFolder}><option value="">Workspace root</option>{#each expandedFolders as folder}<option value={folder}>{folder}</option>{/each}</select></label>
+          </div>
+          {#if watcherError}<p class="tree-alert" role="alert">File watcher: {watcherError}. Refresh manually.</p>{/if}
+          {#if rootDirectory?.error}<p class="tree-alert" role="alert">{rootDirectory.error} <button class="text-button" onclick={() => refreshTree('')}>Retry</button></p>{/if}
+          {#if rootDirectory?.loading && (!rootDirectory.items || delayedRefreshes.includes(''))}<p class="tree-status-message" aria-live="polite">{rootDirectory.items ? 'Refreshing...' : 'Loading workspace...'}</p>{/if}
+          {#if rootDirectory?.items?.length === 0 && !rootDirectory.loading}<p class="tree-status-message">This workspace is empty.</p>{/if}
+          <div class="tree-viewport" bind:this={viewport} bind:clientHeight={viewportHeight} tabindex="-1" aria-label="Scrollable file tree" onscroll={handleTreeScroll}>
+            <ul class="tree-list">
+              <li aria-hidden="true" style={`height: ${startRow * rowHeight}px`}></li>
+              {#each renderedRows as row, index (row.kind === 'item' ? `item:${row.path}` : `status:${row.path}`)}
+                <li class="tree-entry" data-row-index={startRow + index}>
+                  {#if row.kind === 'item'}
+                    <div class="tree-row" style={`padding-left: ${8 + row.depth * 20}px`}>
+                      {#if row.item.is_directory}
+                        <button class="tree-folder" onclick={() => toggleFolder(row.path)} onkeydown={handleTreeKeydown} aria-expanded={expandedFolders.includes(row.path)}>
+                          <span class="tree-disclosure" aria-hidden="true">{expandedFolders.includes(row.path) ? '▾' : '▸'}</span>
+                          <Icon name="folder" class="tree-icon folder-icon" />
+                          <span class="tree-label" title={row.item.name}>{row.item.name}</span>
+                        </button>
+                      {:else if row.path.toLowerCase().endsWith('.md')}
+                        <button class="tree-file tree-note" class:selected={selectedNote === row.path} aria-current={selectedNote === row.path ? 'true' : undefined} title={row.item.name} onclick={() => editor?.open(row.path)} onkeydown={handleTreeKeydown}>
+                          <Icon name={fileIconFor(row.item.name)} class="tree-icon note-icon" />
+                          <span class="tree-label">{row.item.name}</span>
+                        </button>
+                      {:else}
+                        <button class="tree-file" title={row.item.name} onclick={() => openTreeFile(row.path)} onkeydown={handleTreeKeydown}>
+                          <Icon name={fileIconFor(row.item.name)} class="tree-icon" />
+                          <span class="tree-label">{row.item.name}</span>
+                        </button>
+                      {/if}
+                      <button class="icon-button move-button" aria-label={`Move or rename ${row.item.name}`} title={`Move or rename ${row.item.name}`} onclick={() => moveEntry(row.path)} onkeydown={handleTreeKeydown}><Icon name="move" size={14} /></button>
+                    </div>
+                  {:else}
+                    <div class="tree-status" style={`padding-left: ${8 + row.depth * 20}px`}>
+                      <span title={row.message}>{row.message}</span> {#if row.error}<button class="text-button" onclick={() => refreshTree(row.path)} onkeydown={handleTreeKeydown}>Retry</button>{/if}
+                    </div>
+                  {/if}
+                </li>
+              {/each}
+              <li aria-hidden="true" style={`height: ${(visibleTree.length - endRow) * rowHeight}px`}></li>
+            </ul>
+          </div>
+        </aside>
+        {#if workspaceId && editorMounted}<NoteEditor bind:this={editor} bind:selectedNote {workspaceId} {workspaceMessage} />
+        {:else if workspaceMessage}<p class="workspace-message" role="alert">{workspaceMessage}</p>{/if}
       </div>
     </section>
-    {#if workspaceId && editorMounted}<NoteEditor bind:this={editor} bind:selectedNote {workspaceId} />{/if}
-    </div>
+  {:else}
+    <section class="empty-state" aria-live="polite">
+      {#if workspaceMessage}<p class="workspace-message" role="alert">{workspaceMessage}</p>{/if}
+      <h2>Select a workspace</h2>
+      <p>Choose a workspace above to browse its notes.</p>
+    </section>
   {/if}
-  {#if workspaceMessage}<p role="alert">{workspaceMessage}</p>{/if}
 </main>

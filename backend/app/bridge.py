@@ -10,7 +10,10 @@ from typing import Protocol, TypedDict
 from urllib.parse import urlsplit
 
 from backend.app.settings import SETTINGS_PATH, load_settings, save_settings
-from backend.app.workspace import load_workspace_settings
+from backend.app.workspace import (
+    load_workspace_settings,
+    update_workspace_appearance,
+)
 from backend.modules.link_paths import path_after_move, resolve_moved_targets
 from backend.modules.notes import (
     NoteBatch,
@@ -157,6 +160,12 @@ class Bridge:
         if not isinstance(workspace_root, str) or not workspace_root.strip():
             raise ValueError("workspace_root must be a non-empty path string")
         return load_workspace_settings(Path(workspace_root))
+
+    def set_workspace_appearance(self, workspace_id: str, appearance: object) -> None:
+        """Update appearance settings for the currently active workspace."""
+        with self._lock:
+            tree = self._require_tree(workspace_id)
+            update_workspace_appearance(tree.root, appearance)
 
     def open_workspace(self, workspace_root: str) -> TreeSnapshot:
         if not isinstance(workspace_root, str) or not workspace_root.strip():

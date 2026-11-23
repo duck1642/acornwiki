@@ -8,7 +8,11 @@
   import DOMPurify from 'dompurify'
   import { openWorkspaceFile } from './fileActions'
 
-  let { workspaceId, selectedNote = $bindable(null) }: { workspaceId: string; selectedNote: string | null } = $props()
+  let { workspaceId, selectedNote = $bindable(null), workspaceMessage = '' }: {
+    workspaceId: string
+    selectedNote: string | null
+    workspaceMessage?: string
+  } = $props()
   let host: HTMLDivElement
   let view: EditorView
   let path = $state<string | null>(null)
@@ -37,16 +41,40 @@
   let mediaUrl = $state('')
   let dirty = $derived(text !== savedText)
   let rendered = $derived(mode === 'read' ? renderMarkdown(text, path, mediaUrl) : '')
+  let outline = $derived(extractOutline(rendered))
+
+  type OutlineHeading = { id: string; label: string; level: number }
+
+  function extractOutline(html: string): OutlineHeading[] {
+    if (!html) return []
+    const template = document.createElement('template')
+    template.innerHTML = html
+    return Array.from(template.content.querySelectorAll<HTMLHeadingElement>('h1, h2, h3, h4, h5, h6'))
+      .map((heading) => ({ id: heading.id, label: heading.textContent?.trim() ?? '', level: Number(heading.tagName.slice(1)) }))
+      .filter((heading) => heading.id && heading.label)
+  }
+
+  function jumpToHeading(event: MouseEvent, id: string) {
+    event.preventDefault()
+    document.querySelector('.note-read')?.querySelector(`#${CSS.escape(id)}`)?.scrollIntoView({ block: 'start' })
+  }
 
   function renderMarkdown(content: string, note: string | null, endpoint: string): string {
     const template = document.createElement('template')
     template.innerHTML = DOMPurify.sanitize(marked.parse(content, { async: false }))
     const headings = new Map<string, number>()
+    const usedIds = new Set<string>()
     for (const heading of template.content.querySelectorAll('h1,h2,h3,h4,h5,h6')) {
-      const slug = (heading.textContent ?? '').trim().toLowerCase().replace(/[^\p{L}\p{N}_\-\s]/gu, '').replace(/\s/g, '-')
-      const count = headings.get(slug) ?? 0
+      const slug = (heading.textContent ?? '').trim().toLowerCase().replace(/[^\p{L}\p{N}_\-\s]/gu, '').replace(/\s/g, '-') || 'section'
+      let count = headings.get(slug) ?? 0
+      let id = count ? `${slug}-${count}` : slug
+      while (usedIds.has(id)) {
+        count += 1
+        id = `${slug}-${count}`
+      }
+      usedIds.add(id)
       headings.set(slug, count + 1)
-      heading.id = count ? `${slug}-${count}` : slug
+      heading.id = id
     }
     for (const image of template.content.querySelectorAll('img')) {
       const src = image.getAttribute('src') ?? ''
@@ -302,24 +330,58 @@
     <label><input type="checkbox" checked={autoReload} disabled={!settingsLoaded} onchange={(event) => setPreference(event, 'auto_reload')} /> Auto-reload unchanged notes</label>
     <label><input type="checkbox" checked={showReloadNotice} disabled={!settingsLoaded} onchange={(event) => setPreference(event, 'reload_notice')} /> Show reload notification</label>
   </div>
-  {#if message}<p role="status">{message}</p>{/if}
-  {#if error}<p role="alert">{error}</p>{/if}
-  {#if conflict}
-    <div role="alert" class="note-conflict">
-      {#if !missing}
-        <button onclick={loadDisk}>Load disk version</button>
-        {#if dirty}<button onclick={() => { if (window.confirm('Replace the disk version with the editor content?')) void save(diskVersion) }}>Overwrite with editor version</button>{/if}
+  <div class="note-body-layout">
+    <div class="note-scroll">
+      <div class="note-sheet">
+        {#if !path}
+          <div class="note-empty-state">
+            <h2>No note selected</h2>
+            <p>Choose a Markdown file from the workspace tree.</p>
+          </div>
+        {/if}
+        <div class="note-content" hidden={!path || mode !== 'source'} bind:this={host}></div>
+        {#if path && mode === 'read'}<article class="note-content note-read" use:linkHandler>{@html rendered}</article>{/if}
+      </div>
+    </div>
+    {#if path && mode === 'read'}
+      <aside class="note-outline" aria-label="Contents">
+        <h2 class="outline-title">Contents</h2>
+        {#if outline.length === 0}
+          <p class="outline-empty">No headings in this note.</p>
+        {:else}
+          <nav class="outline-nav" aria-label="Note headings">
+            <ul>
+              {#each outline as heading (heading.id)}
+                <li><a class="outline-link outline-level-{heading.level}" href={`#${heading.id}`} onclick={(event) => jumpToHeading(event, heading.id)} title={heading.label}>{heading.label}</a></li>
+              {/each}
+            </ul>
+          </nav>
+        {/if}
+      </aside>
+    {/if}
+  </div>
+  {#if message || error || conflict || prompt || workspaceMessage}
+    <div class="note-notices">
+      {#if message && !conflict}<p role="status" class="status-notice">{message}</p>{/if}
+      {#if error}<p role="alert" class="note-error">{error}</p>{/if}
+      {#if workspaceMessage}<p role={workspaceMessage.startsWith('Could not') ? 'alert' : 'status'} class="workspace-message">{workspaceMessage}</p>{/if}
+      {#if conflict}
+        <div role="alert" class="note-conflict">
+          <span>{message || (missing ? 'The note is missing or cannot be read.' : 'The note changed outside acornwiki.')}</span>
+          {#if !missing}
+            <button onclick={loadDisk}>Load disk version</button>
+            {#if dirty}<button onclick={() => { if (window.confirm('Replace the disk version with the editor content?')) void save(diskVersion) }}>Overwrite with editor version</button>{/if}
+          {/if}
+          <button onclick={() => void checkExternal()}>Check again</button>
+        </div>
       {/if}
-      <button onclick={() => void checkExternal()}>Check again</button>
+      {#if prompt}
+        <div role="alert" class="note-conflict">You have unsaved changes.
+          <button onclick={() => chooseClose?.('save')}>Save</button>
+          <button onclick={() => chooseClose?.('discard')}>Discard</button>
+          <button onclick={() => chooseClose?.('cancel')}>Cancel</button>
+        </div>
+      {/if}
     </div>
   {/if}
-  {#if prompt}
-    <div role="alert" class="note-conflict">You have unsaved changes.
-      <button onclick={() => chooseClose?.('save')}>Save</button>
-      <button onclick={() => chooseClose?.('discard')}>Discard</button>
-      <button onclick={() => chooseClose?.('cancel')}>Cancel</button>
-    </div>
-  {/if}
-  <div class="note-content" hidden={!path || mode !== 'source'} bind:this={host}></div>
-  {#if path && mode === 'read'}<article class="note-content note-read" use:linkHandler>{@html rendered}</article>{/if}
 </section>
