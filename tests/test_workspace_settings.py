@@ -16,6 +16,23 @@ from backend.app.workspace import (
 
 
 class WorkspaceSettingsTests(unittest.TestCase):
+    def test_new_items_folder_and_recursive_search(self) -> None:
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        (root / "nested").mkdir()
+        (root / "nested" / "Example.md").write_text("test", encoding="utf-8")
+        bridge = Bridge()
+        self.addCleanup(bridge._close)
+        workspace_id = bridge.open_workspace(str(root))["workspace_id"]
+        self.addCleanup(lambda: bridge.close_workspace(workspace_id))
+        bridge.set_new_items_folder(workspace_id, "nested")
+        self.assertEqual(load_workspace_settings(root)["new_notes_folder"], "nested")
+        self.assertEqual(bridge.create_note(workspace_id, "nested", "New"), "nested/New.md")
+        self.assertEqual(bridge.search_workspace(workspace_id, "example")["items"], [{"path": "nested/Example.md", "is_directory": False}])
+        with self.assertRaises((ValueError, FileNotFoundError)):
+            bridge.set_new_items_folder(workspace_id, "../outside")
+        self.assertEqual(load_workspace_settings(root)["new_notes_folder"], "nested")
+
     def test_defaults_include_workspace_appearance(self) -> None:
         settings = default_workspace_settings()
         appearance = settings["appearance"]

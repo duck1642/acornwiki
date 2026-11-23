@@ -4,6 +4,7 @@
   import { EditorView } from '@codemirror/view'
   import { basicSetup } from 'codemirror'
   import { markdown } from '@codemirror/lang-markdown'
+  import { ensureSyntaxTree } from '@codemirror/language'
   import { marked } from 'marked'
   import DOMPurify from 'dompurify'
   import { openWorkspaceFile } from './fileActions'
@@ -60,7 +61,7 @@
   let mediaUrl = $state('')
   let outlineFilter = $state('')
   let dirty = $derived(text !== savedText)
-  let rendered = $derived(mode === 'read' ? renderMarkdown(text, path, mediaUrl) : '')
+  let rendered = $derived(renderMarkdown(text, path, mediaUrl))
   let outline = $derived(extractOutline(rendered))
   let filterIsActive = $derived(Boolean(outlineFilter.trim()))
 
@@ -97,7 +98,6 @@
   })
 
   $effect(() => {
-    if (mode !== 'read') return
     const signature = `${path ?? ''}\n${outline.map((heading) => `${heading.id}:${heading.level}`).join('\n')}`
     if (signature === lastOutlineSignature) return
     lastOutlineSignature = signature
@@ -163,7 +163,19 @@
 
   function jumpToHeading(event: MouseEvent, id: string) {
     event.preventDefault()
-    panel.querySelector('.note-read')?.querySelector(`#${CSS.escape(id)}`)?.scrollIntoView({ block: 'start' })
+    if (mode === 'read') {
+      panel.querySelector('.note-read')?.querySelector(`#${CSS.escape(id)}`)?.scrollIntoView({ block: 'start' })
+      return
+    }
+    const index = outline.findIndex((heading) => heading.id === id)
+    const tree = ensureSyntaxTree(view.state, view.state.doc.length, 1000)
+    if (!tree || index < 0) return
+    const positions: number[] = []
+    tree.iterate({ enter(node) { if (/^(ATX|Setext)Heading[1-6]$/.test(node.name)) positions.push(node.from) } })
+    const position = positions[index]
+    if (position === undefined) return
+    view.dispatch({ selection: { anchor: position }, effects: EditorView.scrollIntoView(position, { y: 'start' }) })
+    view.focus()
   }
 
   export async function navigateToFragment(fragment: string) {
@@ -440,7 +452,14 @@
       <button onclick={() => mode = 'source'} aria-pressed={mode === 'source'}>Source</button>
       <button onclick={() => mode = 'read'} aria-pressed={mode === 'read'}>Read</button>
       <button onclick={() => save()} disabled={!dirty || saving || conflict || freezeEditors || prompt}>Save</button>
-      {#if mode === 'read'}<button class="outline-toggle-btn" onclick={toggleOutlinePanel} aria-label="Toggle contents panel" aria-pressed={outlineOpen} title="Toggle contents panel">Contents</button>{/if}
+      <button class="outline-toggle-btn" onclick={toggleOutlinePanel} aria-label="Toggle contents panel" aria-pressed={outlineOpen} title="Toggle contents panel">Contents</button>
+      <details class="note-more-menu">
+        <summary aria-label="More note actions" title="More note actions">⋯</summary>
+        <div class="note-more-content">
+          <button disabled title="Not available yet">Rename</button>
+          <button disabled title="Not available yet">Copy</button>
+        </div>
+      </details>
     {/if}
   </div>
   <div class="note-body-layout">
@@ -456,7 +475,7 @@
         {#if path && mode === 'read'}<article class="note-content note-read" use:linkHandler>{@html rendered}</article>{/if}
       </div>
     </div>
-    {#if path && mode === 'read' && outlineOpen}
+    {#if path && outlineOpen}
       <aside class="note-outline" aria-label="Contents">
         <div class="outline-heading">
           <h2 class="outline-title">Contents</h2>

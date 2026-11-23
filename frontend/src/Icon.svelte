@@ -1,5 +1,5 @@
 <script lang="ts">
-  type IconName = 'code' | 'file' | 'file-plus' | 'file-text' | 'folder' | 'folder-plus' | 'image' | 'markdown' | 'move' | 'network' | 'pdf' | 'refresh' | 'settings' | 'terminal'
+  type IconName = 'code' | 'file' | 'file-plus' | 'file-text' | 'folder' | 'folder-plus' | 'image' | 'markdown' | 'move' | 'network' | 'pdf' | 'refresh' | 'settings' | 'sort' | 'terminal'
 
   let { name, size = 16, class: className = '' }: {
     name: IconName
@@ -60,6 +60,8 @@
       <path d="M12 18h4" />
       <path d="M14 16v4" />
     {/if}
+  {:else if name === 'sort'}
+    <path d="M3 6h12M3 11h8M3 16h4M19 4v14m-3-3 3 3 3-3" />
   {:else if name === 'refresh'}
     <path d="M20 7v5h-5" />
     <path d="M4 17v-5h5" />

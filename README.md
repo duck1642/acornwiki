@@ -11,6 +11,8 @@
 
 ## Development Setup
 
+For manual testing on Windows, run `start-test.bat` or `python start_test.py` from the repository root. This uses a separate test workspace and application settings under `tmp/interface-iteration`; existing test files are preserved. For the normal application settings, run `python start.py`.
+
 From the repository root in PowerShell:
 
 ```powershell

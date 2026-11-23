@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 from backend.app.settings import SETTINGS_PATH, load_settings, save_settings
 from backend.app.workspace import (
     load_workspace_settings,
+    save_workspace_settings,
     update_workspace_appearance,
 )
 from backend.modules.link_paths import path_after_move, resolve_moved_targets
@@ -78,6 +79,7 @@ class Bridge:
         self._close_requested = False
         self._revision = 0
         self._media_url = ""
+        self._search_generation = 0
         self._notifier = threading.Thread(target=self._notify_loop, daemon=True)
         self._notifier.start()
 
@@ -174,6 +176,58 @@ class Bridge:
         with self._lock:
             tree = self._require_tree(workspace_id)
             update_workspace_appearance(tree.root, appearance)
+
+    def set_new_items_folder(self, workspace_id: str, folder: str) -> None:
+        """Save an existing workspace-relative default folder for new items."""
+        if not isinstance(folder, str) or not folder.strip():
+            raise ValueError("A workspace-relative folder is required")
+        with self._lock:
+            tree = self._require_tree(workspace_id)
+            settings = load_workspace_settings(tree.root)
+            settings["new_notes_folder"] = folder.strip()
+            target = (tree.root / folder.strip()).resolve(strict=True)
+            if not target.is_relative_to(tree.root) or not target.is_dir():
+                raise ValueError("Folder must be inside the workspace")
+            save_workspace_settings(tree.root, settings)
+
+    def search_workspace(self, workspace_id: str, query: str) -> dict[str, object]:
+        """Search names without blocking other bridge calls; stop older searches."""
+        if not isinstance(query, str) or not query.strip():
+            raise ValueError("A search term is required")
+        with self._lock:
+            tree = self._require_tree(workspace_id)
+            self._search_generation += 1
+            generation = self._search_generation
+        results: list[dict[str, object]] = []
+        errors: list[str] = []
+
+        def on_error(error: OSError) -> None:
+            errors.append(str(error))
+
+        for directory, folders, files in os.walk(
+            tree.root, followlinks=False, onerror=on_error
+        ):
+            if generation != self._search_generation or tree is not self._tree:
+                return {"items": [], "truncated": False, "error": None}
+            parent = Path(directory)
+            folders[:] = [
+                name for name in folders
+                if not (parent / name).is_symlink() and not (parent / name).is_junction()
+            ]
+            for entries, is_directory in ((folders, True), (files, False)):
+                for name in entries:
+                    if query.casefold() not in name.casefold():
+                        continue
+                    results.append({
+                        "path": (parent / name).relative_to(tree.root).as_posix(),
+                        "is_directory": is_directory,
+                    })
+                    if len(results) >= 500:
+                        return {
+                            "items": results, "truncated": True,
+                            "error": errors[0] if errors else None,
+                        }
+        return {"items": results, "truncated": False, "error": errors[0] if errors else None}
 
     def open_workspace(self, workspace_root: str) -> TreeSnapshot:
         if not isinstance(workspace_root, str) or not workspace_root.strip():

@@ -30,7 +30,9 @@
     ping: () => Promise<string>
     get_settings: () => Promise<{ workspaces: string[]; blocked_extensions: string[]; editor: { autosave: boolean; auto_reload: boolean; reload_notice: boolean } }>
     set_editor_preference: (name: string, value: boolean) => Promise<void>
-    get_workspace_settings: (path: string) => Promise<{ automatic_link_update: boolean; appearance: WorkspaceAppearance }>
+    get_workspace_settings: (path: string) => Promise<{ automatic_link_update: boolean; appearance: WorkspaceAppearance; new_notes_folder: string }>
+    set_new_items_folder: (id: string, folder: string) => Promise<void>
+    search_workspace: (id: string, query: string) => Promise<{ items: { path: string; is_directory: boolean }[]; truncated: boolean; error: string | null }>
     set_workspace_appearance: (workspace_id: string, appearance: AppearancePatch) => Promise<void>
     open_workspace: (path: string) => Promise<TreeSnapshot>
     get_tree: (id: string) => Promise<TreeSnapshot>
@@ -93,6 +95,9 @@
   let selectedWorkspace = $state<string | null>(null)
   let workspaceId = $state<string | null>(null)
   let appearance = $state<AppearanceState>(defaultAppearance)
+  let sessionSurface = $state<SurfaceMode | null>(null)
+  let effectiveSurface = $derived(sessionSurface ?? appearance.surface_mode)
+  let viewMenuOpen = $state(false)
   let appearanceSaving = $state(false)
   let settingsOpen = $state(false)
   let filePanelOpen = $state(true)
@@ -116,6 +121,13 @@
   let directories = $state.raw<Record<string, DirectorySnapshot>>({})
   let expandedFolders = $state<string[]>([])
   let creationFolder = $state('')
+  let creationFolderInput = $state('.')
+  let folderSettingsMessage = $state('')
+  let treeQuery = $state('')
+  let searchResults = $state<{ path: string; is_directory: boolean }[]>([])
+  let searchStatus = $state('')
+  let searchToken = 0
+  let searchTimer: ReturnType<typeof setTimeout> | undefined
   let creating = $state(false)
   let moving = $state(false)
   let automaticLinkUpdate = true
@@ -135,7 +147,7 @@
   let renderedRows = $derived(visibleTree.slice(startRow, endRow))
   $effect(() => {
     document.documentElement.dataset.theme = appearance.theme
-    document.documentElement.dataset.surface = appearance.surface_mode
+    document.documentElement.dataset.surface = effectiveSurface
   })
 
   $effect(() => {
@@ -485,6 +497,9 @@
       directories = {}
       expandedFolders = []
       creationFolder = ''
+      creationFolderInput = '.'
+      treeQuery = ''
+      searchToken++
       scrollTop = 0
       if (viewport) viewport.scrollTop = 0
       sortMode = 'alphabetic'
@@ -494,6 +509,8 @@
         workspaceId = snapshot.workspace_id
         selectedWorkspace = path
         automaticLinkUpdate = preferences.automatic_link_update !== false
+        creationFolder = !preferences.new_notes_folder || preferences.new_notes_folder === '.' ? '' : preferences.new_notes_folder
+        creationFolderInput = preferences.new_notes_folder || '.'
         appearance = normalizeAppearance(preferences.appearance)
         applySnapshot(snapshot)
         await syncTree()
@@ -552,7 +569,6 @@
     workspaceMessage = ''
     try {
       await api.set_workspace_appearance(id, patch)
-      if (id === workspaceId) workspaceMessage = 'Appearance saved.'
     } catch (error) {
       if (id === workspaceId) {
         appearance = previous
@@ -568,7 +584,6 @@
     const closing = expandedFolders.includes(path)
     const affected = closing ? expandedFolders.filter((p) => p === path || p.startsWith(`${path}/`)) : [path]
     expandedFolders = closing ? expandedFolders.filter((p) => !affected.includes(p)) : [...expandedFolders, path]
-    if (closing && affected.includes(creationFolder)) creationFolder = ''
     try {
       for (const folder of affected) applySnapshot(await api.set_directory_visible(id, folder, !closing))
     } catch (error) { if (id === workspaceId) { workspaceMessage = 'Could not update the folder.'; console.error(error) } }
@@ -612,7 +627,6 @@
           }
         }
         expandedFolders = []
-        creationFolder = ''
         await syncTree()
         workspaceMessage = result.failures.length
           ? `Moved, but some notes could not be updated: ${result.failures.map(item => `${item.path}: ${item.error}`).join('; ')}`
@@ -632,6 +646,58 @@
     sortMode = target.value
     try { applySnapshot(await api.set_tree_sort(id, sortMode)) }
     catch (error) { workspaceMessage = 'Could not change sorting.'; console.error(error) }
+  }
+  async function saveCreationFolder() {
+    const id = workspaceId
+    if (!id) return
+    try {
+      const folder = creationFolderInput.trim() || '.'
+      await window.pywebview?.api?.set_new_items_folder(id, folder)
+      if (id !== workspaceId) return
+      creationFolder = folder === '.' ? '' : folder
+      creationFolderInput = folder
+      folderSettingsMessage = 'Default folder saved.'
+    } catch (error) { folderSettingsMessage = 'Choose an existing folder inside the workspace.'; console.error(error) }
+  }
+  function searchFiles() {
+    clearTimeout(searchTimer)
+    const token = ++searchToken
+    const id = workspaceId
+    const query = treeQuery.trim()
+    searchResults = []
+    searchStatus = query ? 'Searching...' : ''
+    if (!id || !query) return
+    searchTimer = setTimeout(async () => {
+      try {
+        const result = await window.pywebview?.api?.search_workspace(id, query)
+        if (!result || token !== searchToken || id !== workspaceId) return
+        searchResults = result.items
+        searchStatus = result.error ? 'Some folders could not be searched.' : result.truncated ? 'Showing the first 500 results.' : result.items.length ? '' : 'No matches.'
+      } catch (error) { if (token === searchToken) searchStatus = 'Search failed.'; console.error(error) }
+    }, 250)
+  }
+  async function openSearchResult(path: string, isDirectory: boolean) {
+    if (!isDirectory) {
+      if (path.toLowerCase().endsWith('.md')) await openNote(path)
+      else await openTreeFile(path)
+      return
+    }
+    const id = workspaceId
+    const api = window.pywebview?.api
+    if (!id || !api) return
+    try {
+      const parts = path.split('/')
+      for (let i = 1; i <= parts.length; i++) {
+        const folder = parts.slice(0, i).join('/')
+        if (!expandedFolders.includes(folder)) {
+          applySnapshot(await api.set_directory_visible(id, folder, true))
+          if (id !== workspaceId) return
+          expandedFolders = [...expandedFolders, folder]
+        }
+      }
+      treeQuery = ''
+      searchFiles()
+    } catch (error) { searchStatus = 'Could not open the folder.'; console.error(error) }
   }
   async function refreshTree(path: string | null) {
     const api = window.pywebview?.api
@@ -699,19 +765,19 @@
   <header class="menu-bar" aria-label="Application menu">
     <div class="menu-items" aria-label="Menus">
       <button class="menu-sidebar-toggle" onclick={toggleFilePanel} aria-label="Toggle files panel" aria-pressed={filePanelOpen} title="Toggle files panel"><Icon name="folder" /></button>
-      {#each ['File', 'Edit', 'View', 'Navigate', 'Help'] as menu}
-        <button class="menu-item" disabled title="This menu is not available yet">{menu}</button>
-      {/each}
-    </div>
-    <div class="appearance-controls" aria-label="Appearance">
-      <div class="appearance-group" role="group" aria-label="Theme">
-        <button class:active={appearance.theme === 'warm-charcoal'} aria-pressed={appearance.theme === 'warm-charcoal'} disabled={!workspaceId || appearanceSaving} onclick={() => setAppearance({ theme: 'warm-charcoal' })}>Warm Charcoal</button>
-        <button class:active={appearance.theme === 'warm-paper'} aria-pressed={appearance.theme === 'warm-paper'} disabled={!workspaceId || appearanceSaving} onclick={() => setAppearance({ theme: 'warm-paper' })}>Warm Paper</button>
-      </div>
-      <div class="appearance-group surface-group" role="group" aria-label="Document surface">
-        <button class:active={appearance.surface_mode === 'framed'} aria-pressed={appearance.surface_mode === 'framed'} disabled={!workspaceId || appearanceSaving} onclick={() => setAppearance({ surface_mode: 'framed' })}>Framed</button>
-        <button class:active={appearance.surface_mode === 'seamless'} aria-pressed={appearance.surface_mode === 'seamless'} disabled={!workspaceId || appearanceSaving} onclick={() => setAppearance({ surface_mode: 'seamless' })}>Seamless</button>
-      </div>
+      <button class="menu-item" disabled title="This menu is not available yet">File</button>
+      <button class="menu-item" disabled title="This menu is not available yet">Edit</button>
+      <details class="view-menu" bind:open={viewMenuOpen}>
+        <summary class="menu-item">View</summary>
+        <div class="view-menu-content" role="group" aria-label="Session document surface">
+          <strong>Document surface</strong>
+          <button aria-pressed={effectiveSurface === 'framed'} onclick={() => { sessionSurface = 'framed'; viewMenuOpen = false }}>Framed</button>
+          <button aria-pressed={effectiveSurface === 'seamless'} onclick={() => { sessionSurface = 'seamless'; viewMenuOpen = false }}>Seamless</button>
+          <button onclick={() => { sessionSurface = null; viewMenuOpen = false }}>Use workspace default</button>
+        </div>
+      </details>
+      <button class="menu-item" disabled title="This menu is not available yet">Navigate</button>
+      <button class="menu-item" disabled title="This menu is not available yet">Help</button>
     </div>
     <div class="header-actions">
       <p class="connection-status" aria-live="polite"><span class="connection-dot" class:connected={ready}></span>{message}</p>
@@ -741,16 +807,22 @@
         <div class="tree-heading">
           <h2>Files</h2>
           <div class="tree-actions">
+            <label class="sort-control" title="Sort files"><Icon name="sort" /><select aria-label="Sort files" value={sortMode} onchange={changeSortMode} disabled={!workspaceId}><option value="alphabetic">Alphabetical</option><option value="modified">Modified</option></select></label>
             <button class="icon-button" onclick={() => refreshTree(null)} disabled={!workspaceId} aria-label="Refresh file tree" title="Refresh file tree"><Icon name="refresh" /></button>
             <button class="icon-button" disabled={!workspaceId || creating} onclick={() => createEntry('note')} aria-label="New note" title="New note"><Icon name="file-plus" /></button>
             <button class="icon-button" disabled={!workspaceId || creating} onclick={() => createEntry('folder')} aria-label="New folder" title="New folder"><Icon name="folder-plus" /></button>
           </div>
         </div>
         {#if workspaceId}
-          <div class="tree-options">
-            <label>Sort <select value={sortMode} onchange={changeSortMode}><option value="alphabetic">Alphabetical</option><option value="modified">Modified</option></select></label>
-            <label>New item in <select aria-label="Destination" bind:value={creationFolder}><option value="">Workspace root</option>{#each expandedFolders as folder}<option value={folder}>{folder}</option>{/each}</select></label>
-          </div>
+          <input class="file-search" type="search" aria-label="Search files" placeholder="Search files..." bind:value={treeQuery} oninput={(event) => { treeQuery = event.currentTarget.value; searchFiles() }} />
+          {#if treeQuery.trim()}
+            <div class="tree-viewport search-results">
+              {#if searchStatus}<p class="tree-status-message" role="status">{searchStatus}</p>{/if}
+              {#each searchResults as result (result.path)}
+                <button class="search-result" title={result.path} onclick={() => openSearchResult(result.path, result.is_directory)}><Icon name={result.is_directory ? 'folder' : fileIconFor(result.path)} /><span>{result.path}</span></button>
+              {/each}
+            </div>
+          {:else}
           {#if watcherError}<p class="tree-alert" role="alert">File watcher: {watcherError}. Refresh manually.</p>{/if}
           {#if rootDirectory?.error}<p class="tree-alert" role="alert">{rootDirectory.error} <button class="text-button" onclick={() => refreshTree('')}>Retry</button></p>{/if}
           {#if rootDirectory?.loading && (!rootDirectory.items || delayedRefreshes.includes(''))}<p class="tree-status-message" aria-live="polite">{rootDirectory.items ? 'Refreshing...' : 'Loading workspace...'}</p>{/if}
@@ -791,6 +863,7 @@
               <li aria-hidden="true" style={`height: ${(visibleTree.length - endRow) * rowHeight}px`}></li>
             </ul>
           </div>
+          {/if}
         {:else}
           <p class="tree-status-message">Choose a workspace below to see its files.</p>
         {/if}
@@ -861,10 +934,17 @@
                     <button class:active={appearance.theme === 'warm-charcoal'} aria-pressed={appearance.theme === 'warm-charcoal'} disabled={!workspaceId || appearanceSaving} onclick={() => setAppearance({ theme: 'warm-charcoal' })}>Warm Charcoal</button>
                     <button class:active={appearance.theme === 'warm-paper'} aria-pressed={appearance.theme === 'warm-paper'} disabled={!workspaceId || appearanceSaving} onclick={() => setAppearance({ theme: 'warm-paper' })}>Warm Paper</button>
                   </div></div>
-                  <div class="settings-appearance-row"><span>Document surface</span><div class="appearance-group surface-group" role="group" aria-label="Document surface">
+                  <div class="settings-appearance-row"><span>Default document surface</span><div class="appearance-group surface-group" role="group" aria-label="Default document surface">
                     <button class:active={appearance.surface_mode === 'framed'} aria-pressed={appearance.surface_mode === 'framed'} disabled={!workspaceId || appearanceSaving} onclick={() => setAppearance({ surface_mode: 'framed' })}>Framed</button>
                     <button class:active={appearance.surface_mode === 'seamless'} aria-pressed={appearance.surface_mode === 'seamless'} disabled={!workspaceId || appearanceSaving} onclick={() => setAppearance({ surface_mode: 'seamless' })}>Seamless</button>
                   </div></div>
+                </section>
+                <section class="settings-section">
+                  <h2>Workspace files</h2>
+                  <p>Default folder for new notes and folders, relative to the workspace. Use . for the workspace root.</p>
+                  <label>New items folder <input aria-label="New items folder" type="text" bind:value={creationFolderInput} disabled={!workspaceId} /></label>
+                  <button class="text-button" onclick={saveCreationFolder} disabled={!workspaceId}>Save folder</button>
+                  {#if folderSettingsMessage}<p role="status" class="settings-message">{folderSettingsMessage}</p>{/if}
                 </section>
                 <section class="settings-section">
                   <h2>File access</h2>
@@ -891,7 +971,7 @@
   </div>
   <footer class="status-bar">
     <span>{selectedWorkspace ?? 'No workspace selected'}</span>
-    <span>{selectedNote ?? 'No note open'} · {appearance.theme === 'warm-paper' ? 'Warm Paper' : 'Warm Charcoal'} · {appearance.surface_mode === 'seamless' ? 'Seamless' : 'Framed'}</span>
+    <span>{selectedNote ?? 'No note open'} · {appearance.theme === 'warm-paper' ? 'Warm Paper' : 'Warm Charcoal'} · {effectiveSurface === 'seamless' ? 'Seamless' : 'Framed'}</span>
   </footer>
   {#if bulkClose}
     <div class="bulk-close-backdrop">
