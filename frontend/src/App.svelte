@@ -264,6 +264,11 @@
       const plan = automaticLinkUpdate ? await planMoveLinks(api, id, source, destination) : null
       workspaceMessage = 'Moving and updating links...'
       const result = await api.commit_move(id, source, destination, plan?.snapshots ?? null, plan?.rewrites ?? [])
+      for (const folder of expandedFolders) {
+        if (folder !== source && !folder.startsWith(`${source}/`)) {
+          try { await api.set_directory_visible(id, folder, false) } catch (error) { console.error(error) }
+        }
+      }
       expandedFolders = []
       creationFolder = ''
       await syncTree()
@@ -299,6 +304,9 @@
     if (event.key !== 'Tab' || !(event.target instanceof HTMLButtonElement) || !viewport) return
     const entry = event.target.closest<HTMLElement>('[data-row-index]')
     if (!entry) return
+    const buttons = Array.from(entry.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'))
+    const position = buttons.indexOf(event.target)
+    if ((!event.shiftKey && position < buttons.length - 1) || (event.shiftKey && position > 0)) return
     const current = Number(entry.dataset.rowIndex)
     const direction = event.shiftKey ? -1 : 1
     let next = current + direction
@@ -315,7 +323,8 @@
       scrollTop = viewport.scrollTop
     }
     await tick()
-    viewport.querySelector<HTMLButtonElement>(`[data-row-index="${next}"] button`)?.focus()
+    const nextButtons = viewport.querySelectorAll<HTMLButtonElement>(`[data-row-index="${next}"] button`)
+    nextButtons[event.shiftKey ? nextButtons.length - 1 : 0]?.focus()
   }
   function handleTreeScroll(event: Event) {
     if (!(event.currentTarget instanceof HTMLDivElement)) return
@@ -394,7 +403,7 @@
                   {:else if row.path.toLowerCase().endsWith('.md')}
                     <button class="tree-file tree-note" class:selected={selectedNote === row.path} aria-current={selectedNote === row.path ? 'true' : undefined} title={row.item.name} onclick={() => editor?.open(row.path)} onkeydown={handleTreeKeydown}>{row.item.name}</button>
                   {:else}<button class="tree-file" title={row.item.name} onclick={() => openTreeFile(row.path)} onkeydown={handleTreeKeydown}>{row.item.name}</button>{/if}
-                  <button aria-label={`Move or rename ${row.item.name}`} onclick={() => moveEntry(row.path)}>Move</button>
+                  <button aria-label={`Move or rename ${row.item.name}`} onclick={() => moveEntry(row.path)} onkeydown={handleTreeKeydown}>Move</button>
                 </div>
               {:else}
                 <div class="tree-status" style={`padding-left: ${8 + row.depth * 20}px`}>

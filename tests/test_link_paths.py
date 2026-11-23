@@ -17,12 +17,58 @@ from backend.modules.notes import (
     list_markdown_notes,
     read_note,
     read_note_batch,
+    resolve_note_link,
     validate_note_rewrites,
     validate_note_scan,
 )
 
 
 class LinkPathTests(unittest.TestCase):
+    def test_reentered_folder_link_resolves_after_rename(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            (root / "docs").mkdir()
+            (root / "docs/note.md").touch()
+            (root / "docs/target.md").touch()
+            targets = [
+                "../docs/target.md#part",
+                "%2e%2e/docs/target.md",
+                "./target.md#part",
+            ]
+            changes = resolve_moved_targets(
+                root, "docs/note.md", "docs", "notes", targets
+            )
+            self.assertEqual(changes, ["target.md#part", "target.md", None])
+            (root / "docs").rename(root / "notes")
+            for original, replacement in zip(targets, changes, strict=True):
+                actual, _ = resolve_note_link(
+                    root, "notes/note.md", replacement or original
+                )
+                self.assertTrue((root / actual).samefile(root / "notes/target.md"))
+
+    def test_numeric_entities_in_path_preserve_fragment_and_unrelated_links(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            targets = [
+                "file&#32;name.md",
+                "file&#x20;name&#46;md#part&#32;2",
+                "<file&#32;name.md#>",
+            ]
+            self.assertEqual(
+                resolve_moved_targets(
+                    root, "note.md", "unrelated.md", "other.md", targets
+                ),
+                [None, None, None],
+            )
+            self.assertEqual(
+                resolve_moved_targets(
+                    root, "note.md", "file name.md", "new name.md", targets
+                ),
+                ["new%20name.md", "new%20name.md#part&#32;2", "<new name.md#>"],
+            )
+
     def test_plan_validation_detects_changed_unmodified_and_added_notes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()

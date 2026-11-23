@@ -50,9 +50,10 @@ export async function planMoveLinks(
   const snapshots: { path: string; version: string }[] = []
   let index = 0
   while (index < paths.length) {
-    const batch = await api.read_plan_notes(workspaceId, paths, index, 2_000_000, 50)
+    const pending = paths.slice(index, index + 50)
+    const batch = await api.read_plan_notes(workspaceId, pending, 0, 2_000_000, 50)
     signal?.throwIfAborted()
-    if (batch.next_index <= index || batch.next_index > paths.length || batch.notes.length !== batch.next_index - index) throw new Error('Invalid note batch')
+    if (batch.next_index <= 0 || batch.next_index > pending.length || batch.notes.length !== batch.next_index) throw new Error('Invalid note batch')
     snapshots.push(...batch.notes.map(({ path, version }) => ({ path, version })))
     const candidates = updateLinks ? batch.notes.map(note => ({ note, ranges: collectMarkdownTargets(note.content) })).filter(item => item.ranges.length) : []
     const replacements = candidates.length ? await api.plan_link_targets_batch(workspaceId, source, destination, candidates.map(({ note, ranges }) => ({ path: note.path, targets: ranges.map(range => range.target) }))) : []
@@ -62,7 +63,7 @@ export async function planMoveLinks(
       const content = applyMarkdownTargetReplacements(note.content, ranges, replacements[position])
       if (content !== note.content) rewrites.push({ ...note, content })
     }
-    index = batch.next_index
+    index += batch.next_index
     await new Promise<void>(resolve => setTimeout(resolve, 0))
     signal?.throwIfAborted()
   }

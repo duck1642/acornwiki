@@ -20,29 +20,38 @@ class MarkdownTarget:
     """Keep the resolved target and the original syntax needed for rewriting."""
 
     path: str
+    relative_path: str
     angled: bool
     encoded_unicode: bool
     fragment: str
     has_query: bool
 
 
-def _unescape_markdown(value: str) -> str:
-    """Decode Markdown escapes and entities in source order."""
-    pattern = (
-        r"\\(["
-        + re.escape(string.punctuation)
-        + r"])|(&\#(?:[xX][0-9a-fA-F]+|[0-9]+);|&[a-zA-Z][a-zA-Z0-9]+;)"
-    )
+_DESTINATION_TOKEN = re.compile(
+    r"\\(["
+    + re.escape(string.punctuation)
+    + r"])|(&#(?:[xX][0-9a-fA-F]+|[0-9]+);|&[a-zA-Z][a-zA-Z0-9]+;)|#"
+)
 
-    def replace(match: re.Match[str]) -> str:
+
+def _decode_before_fragment(value: str) -> tuple[str, str]:
+    """Decode the URL prefix while preserving the source spelling of the fragment."""
+    chunks: list[str] = []
+    start = 0
+    for match in _DESTINATION_TOKEN.finditer(value):
+        chunks.append(value[start : match.start()])
+        token = match[0]
+        if token == "#":
+            return "".join(chunks), value[match.start() :]
         if match.group(1) is not None:
-            return match.group(1)
-        entity = match.group(2)
-        if not entity.startswith("&#") and entity[1:] not in html.entities.html5:
-            return entity
-        return html.unescape(entity)
-
-    return re.sub(pattern, replace, value)
+            chunks.append(match[1])
+        elif token.startswith("&#") or token[1:] in html.entities.html5:
+            chunks.append(html.unescape(token))
+        else:
+            chunks.append(token)
+        start = match.end()
+    chunks.append(value[start:])
+    return "".join(chunks), ""
 
 
 def parse_markdown_target(
@@ -53,25 +62,22 @@ def parse_markdown_target(
         raise ValueError("A Markdown target is required")
     angled = raw_target.startswith("<") and raw_target.endswith(">")
     inner = raw_target[1:-1] if angled else raw_target
-    decoded = _unescape_markdown(inner)
+    decoded, fragment = _decode_before_fragment(inner)
     parts = urlsplit(decoded)
     if parts.scheme or parts.netloc or not parts.path:
         return None
     has_query = "?" in decoded.split("#", 1)[0]
     # Reject fragment delimiters that cannot be split from the raw text safely.
-    raw_path, separator, raw_fragment = inner.partition("#")
-    if not has_query and (
-        _unescape_markdown(raw_path) != parts.path or (parts.fragment and not separator)
-    ):
+    if not has_query and decoded != parts.path:
         raise ValueError("Cannot preserve this Markdown fragment safely")
     try:
-        unquote(parts.path, errors="strict")
+        relative_path = unquote(parts.path, errors="strict")
     except UnicodeDecodeError as error:
         raise ValueError("Link path has invalid UTF-8 encoding") from error
     path, _ = resolve_note_link(root, note, parts.path)
-    encoded_unicode = bool(re.search(r"%(?:[c-fC-F][0-9a-fA-F])", raw_path))
+    encoded_unicode = bool(re.search(r"%(?:[c-fC-F][0-9a-fA-F])", parts.path))
     return MarkdownTarget(
-        path, angled, encoded_unicode, separator + raw_fragment, has_query
+        path, relative_path, angled, encoded_unicode, fragment, has_query
     )
 
 
@@ -136,16 +142,32 @@ def path_after_move(path: str, source: str, destination: str) -> str:
 
 
 def link_path_after_move(
-    note: str, target: str, source: str, destination: str
+    note: str,
+    target: str,
+    source: str,
+    destination: str,
+    *,
+    original_relative: str | None = None,
 ) -> str | None:
     """Return a new relative path, or None when the old path remains valid."""
     _parts(note)
     _parts(target, allow_root=True)
     moved_note = path_after_move(note, source, destination)
     moved_target = path_after_move(target, source, destination)
-    old_relative = posixpath.relpath(target, posixpath.dirname(note) or ".")
-    new_relative = posixpath.relpath(moved_target, posixpath.dirname(moved_note) or ".")
-    return None if old_relative == new_relative else new_relative
+    old_parent = posixpath.dirname(note)
+    new_parent = posixpath.dirname(moved_note)
+    old_relative = posixpath.relpath(target, old_parent or ".")
+    new_relative = posixpath.relpath(moved_target, new_parent or ".")
+    if old_relative != new_relative:
+        return new_relative
+    if original_relative is not None and old_parent != new_parent:
+        # An internal link may leave the folder and re-enter it by its former name.
+        retained_target = posixpath.normpath(
+            posixpath.join(new_parent, original_relative)
+        )
+        if os.path.normcase(retained_target) != os.path.normcase(moved_target):
+            return new_relative
+    return None
 
 
 def resolve_moved_targets(
@@ -163,7 +185,13 @@ def resolve_moved_targets(
         if target is None:
             results.append(None)
             continue
-        new_path = link_path_after_move(note, target.path, source, destination)
+        new_path = link_path_after_move(
+            note,
+            target.path,
+            source,
+            destination,
+            original_relative=target.relative_path,
+        )
         if new_path is not None and target.has_query:
             raise ValueError(f"Cannot rewrite a local link with a query in {note}")
         results.append(
