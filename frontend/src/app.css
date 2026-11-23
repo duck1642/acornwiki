@@ -142,7 +142,7 @@ a:focus-visible {
 }
 
 .menu-items { flex: 0 1 auto; min-width: 0; gap: 2px; }
-.menu-item { padding: 5px 7px; border: 0; border-radius: 4px; background: transparent; color: var(--ink-muted); font-size: 11px; }
+.menu-item { padding: 5px 7px; border: 0; border-radius: 4px; background: transparent; color: var(--ink-muted); font-size: 12px; }
 .menu-item:disabled { opacity: 0.65; }
 .menu-item:hover:disabled { background: transparent; }
 .view-menu { position: relative; }
@@ -245,10 +245,14 @@ a:focus-visible {
 .appearance-group button:hover:not(:disabled) { color: var(--ink); }
 .appearance-group button.active { color: var(--accent); font-weight: 650; }
 
-.workspace-layout { display: grid; flex: 1; min-width: 0; min-height: 0; grid-template-columns: 42px minmax(220px, 264px) minmax(0, 1fr); background: var(--bg-app); }
-.workspace-layout.outline-open { grid-template-columns: 42px minmax(220px, 264px) minmax(0, 1fr) 224px; }
+.workspace-layout { display: grid; flex: 1; min-width: 0; min-height: 0; grid-template-columns: 42px var(--files-width, 264px) minmax(0, 1fr); background: var(--bg-app); }
+.workspace-layout.outline-open { grid-template-columns: 42px var(--files-width, 264px) minmax(0, 1fr) var(--contents-width, 224px); }
 .workspace-layout.files-hidden { grid-template-columns: 42px minmax(0, 1fr); }
-.workspace-layout.files-hidden.outline-open { grid-template-columns: 42px minmax(0, 1fr) 224px; }
+.workspace-layout.files-hidden.outline-open { grid-template-columns: 42px minmax(0, 1fr) var(--contents-width, 224px); }
+.panel-resize-handle { position: absolute; z-index: 3; top: 0; right: -4px; bottom: 0; width: 8px; cursor: col-resize; touch-action: none; }
+.panel-resize-handle.right-handle { right: auto; left: -4px; }
+.panel-resize-handle::after { position: absolute; top: 0; bottom: 0; left: 3px; width: 1px; content: ''; }
+.panel-resize-handle:hover::after, .panel-resize-handle.dragging::after { background: var(--accent); }
 
 .activity-bar {
   grid-column: 1;
@@ -270,9 +274,12 @@ a:focus-visible {
 .activity-button:disabled { opacity: 0.3; }
 .activity-spacer { flex: 1; }
 
-.sort-control { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; color: var(--ink-muted); }
-.sort-control select { position: absolute; inset: 0; width: 100%; opacity: 0; cursor: pointer; }
-.sort-control:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.sort-control { position: relative; color: var(--ink-muted); }
+.sort-control > summary { display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; list-style: none; cursor: pointer; }
+.sort-control > summary::-webkit-details-marker { display: none; }
+.sort-control > summary[aria-disabled='true'] { opacity: 0.4; cursor: default; }
+.sort-control > summary:hover:not([aria-disabled='true']) { color: var(--ink); }
+.sort-menu { top: calc(100% + 4px); left: 0; min-width: 210px; }
 .file-search {
   display: block;
   box-sizing: border-box;
@@ -346,6 +353,7 @@ a:focus-visible {
 .primary-button:hover:not(:disabled) { filter: brightness(1.08); }
 
 .file-tree {
+  position: relative;
   min-width: 0;
   min-height: 0;
   display: flex;
@@ -495,7 +503,7 @@ a:focus-visible {
 .note-sheet {
   width: 100%;
   max-width: var(--page-width, 74ch);
-  min-height: calc(100% - 28px);
+  min-height: 100%;
   margin: 0 auto;
   display: flex;
   flex-direction: column;
@@ -560,6 +568,7 @@ a:focus-visible {
 .note-read td { padding: 6px 8px; border: 1px solid var(--border); text-align: left; }
 
 .note-outline {
+  position: relative;
   min-width: 0;
   min-height: 0;
   display: flex;
@@ -676,6 +685,7 @@ a:focus-visible {
 }
 
 @media (max-width: 720px) {
+  .panel-resize-handle { display: none; }
   .menu-bar { flex: 0 0 auto; min-height: 67px; flex-wrap: wrap; gap: 2px 6px; padding: 4px 7px; }
   .menu-items { order: 1; flex: 1 1 auto; }
   .menu-sidebar-toggle-right { order: 2; }
@@ -708,7 +718,7 @@ a:focus-visible {
   .bulk-close-backdrop { padding: 10px; }
   .bulk-close-dialog { padding: 16px; }
   .note-scroll { flex: 1 1 auto; min-height: 0; padding: 10px; }
-  .note-sheet { min-height: calc(100% - 12px); padding: 22px 20px 30px; font-size: 15px; }
+  .note-sheet { min-height: 100%; padding: 22px 20px 30px; font-size: 15px; }
   :root[data-surface='seamless'] .note-sheet { padding: 18px 10px 26px; }
   .note-outline { flex: 0 0 auto; max-height: 190px; border-top: 1px solid var(--border); border-left: 0; }
   .outline-title { padding: 10px 12px 5px; }

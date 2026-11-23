@@ -30,7 +30,6 @@
     onOpenNote,
     onStatusChange,
     onOutlineChange,
-    workspaceMessage = '',
   }: {
     workspaceId: string
     workspaceName?: string
@@ -46,7 +45,6 @@
     onOpenNote: (path: string, fragment?: string, options?: { newTab?: boolean }) => void | Promise<void>
     onStatusChange: (key: string, status: EditorStatus) => void
     onOutlineChange?: (key: string, headings: FlatOutlineHeading[]) => void
-    workspaceMessage?: string
   } = $props()
   let host: HTMLDivElement
   let panel: HTMLElement
@@ -509,11 +507,10 @@
       {#if path && mode === 'read'}<article class="note-content note-read" use:linkHandler>{@html rendered}</article>{/if}
     </div>
   </div>
-  {#if message || error || conflict || prompt || workspaceMessage}
+  {#if message || error || conflict || prompt}
     <div class="note-notices">
       {#if message && !conflict}<p role="status" class="status-notice">{message}</p>{/if}
       {#if error}<p role="alert" class="note-error">{error}</p>{/if}
-      {#if workspaceMessage}<p role={workspaceMessage.startsWith('Could not') ? 'alert' : 'status'} class="workspace-message">{workspaceMessage}</p>{/if}
       {#if conflict}
         <div role="alert" class="note-conflict">
           <span>{message || (missing ? 'The note is missing or cannot be read.' : 'The note changed outside acornwiki.')}</span>

@@ -17,32 +17,41 @@ class FileTreeItem(TypedDict):
     name: str
     is_directory: bool
     modified_time: float | None
+    created_time: float | None
 
 
-def scan_dir(folder: Path, include_modified: bool = False) -> list[FileTreeItem]:
+def scan_dir(folder: Path, include_date_metadata: bool = False) -> list[FileTreeItem]:
     """Read one directory without recursively scanning its children."""
     # Read metadata only for date sorting: stat calls can add substantial I/O in large directories. Children are scanned separately when opened.
+    items = []
     with os.scandir(folder) as entries:
-        return [
-            {
+        for entry in entries:
+            stat = entry.stat(follow_symlinks=False) if include_date_metadata else None
+            created = getattr(stat, "st_birthtime", None) if stat else None
+            if stat and created is None and os.name == "nt":
+                created = stat.st_ctime
+            items.append({
                 "name": entry.name,
                 "is_directory": entry.is_dir(follow_symlinks=False),
-                "modified_time": entry.stat(follow_symlinks=False).st_mtime
-                if include_modified
-                else None,
-            }
-            for entry in entries
-        ]
+                "modified_time": stat.st_mtime if stat else None,
+                "created_time": created,
+            })
+    return items
 
 
 def sort_items(items: list[FileTreeItem], sort_mode: str) -> list[FileTreeItem]:
-    if sort_mode == "alphabetic":
-        return sorted(items, key=lambda item: item["name"].casefold())
-    if sort_mode == "modified":
+    if sort_mode in ("alphabetic", "alphabetic_desc"):
         return sorted(
             items,
-            key=lambda item: item["modified_time"] or 0,
-            reverse=True,
+            key=lambda item: item["name"].casefold(),
+            reverse=sort_mode == "alphabetic_desc",
+        )
+    if sort_mode in ("modified", "modified_asc", "created", "created_asc"):
+        key = "created_time" if sort_mode.startswith("created") else "modified_time"
+        return sorted(
+            items,
+            key=lambda item: item.get(key) or 0,
+            reverse=not sort_mode.endswith("_asc"),
         )
     raise ValueError(f"Unknown sort mode: {sort_mode}")
 
@@ -78,7 +87,7 @@ class Directory:
     version: int = 0
     deadline: float | None = None
     error: str | None = None
-    modified_metadata: bool = False
+    has_date_metadata: bool = False
 
 
 class ChangeHandler(FileSystemEventHandler):
@@ -252,15 +261,15 @@ class FileTree:
 
     def uses_modified_sort(self) -> bool:
         with self._condition:
-            return self._sort_mode == "modified"
+            return self._sort_mode in ("modified", "modified_asc")
 
     def set_sort(self, sort_mode: str) -> None:
-        if sort_mode not in ("alphabetic", "modified"):
+        if sort_mode not in ("alphabetic", "alphabetic_desc", "modified", "modified_asc", "created", "created_asc"):
             raise ValueError(f"Unknown sort mode: {sort_mode}")
         with self._condition:
             self._sort_mode = sort_mode
             for directory in self._directories.values():
-                if sort_mode == "modified" and not directory.modified_metadata:
+                if sort_mode in ("modified", "modified_asc", "created", "created_asc") and not directory.has_date_metadata:
                     directory.stale = True
                     directory.version += 1
                     directory.deadline = (
@@ -415,7 +424,7 @@ class FileTree:
                         directory.deadline = None
                         directory.loading = True
                         version = directory.version
-                        include_modified = self._sort_mode == "modified"
+                        include_date_metadata = self._sort_mode in ("modified", "modified_asc", "created", "created_asc")
                         self._changed()
                         break
                     deadlines = [
@@ -445,7 +454,7 @@ class FileTree:
             self._signal()
             try:
                 _, path = self._path(key)
-                items = scan_dir(path, include_modified)
+                items = scan_dir(path, include_date_metadata)
                 error = None
             except (OSError, ValueError) as exc:
                 items = None
@@ -458,7 +467,7 @@ class FileTree:
                 directory.loading = False
                 # A change during the scan, or a switch to date sorting, makes its result unreliable. Schedule another scan instead.
                 if version != directory.version or (
-                    self._sort_mode == "modified" and not include_modified
+                    self._sort_mode in ("modified", "modified_asc", "created", "created_asc") and not include_date_metadata
                 ):
                     directory.deadline = time.monotonic() + OPEN_DELAY
                 elif error is not None:
@@ -466,7 +475,7 @@ class FileTree:
                     directory.stale = True
                 else:
                     directory.items = items
-                    directory.modified_metadata = include_modified
+                    directory.has_date_metadata = include_date_metadata
                     directory.stale = False
                     directory.error = None
                 self._changed()

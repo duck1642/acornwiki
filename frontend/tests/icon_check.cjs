@@ -175,6 +175,22 @@ const net = require('node:net');
       return { dark, light };
     });
     assert.notEqual(colors.dark, colors.light, 'File icon colors should adapt to the panel background');
+    async function dragHandle(label, delta) {
+      const handle = page.getByRole('separator', { name: label });
+      const box = await handle.boundingBox();
+      await page.mouse.move(box.x + box.width / 2, box.y + 30);
+      await page.mouse.down();
+      await page.mouse.move(box.x + box.width / 2 + delta, box.y + 30, { steps: 5 });
+      await page.mouse.up();
+    }
+    const filesBefore = (await page.locator('.file-tree').boundingBox()).width;
+    await dragHandle('Resize files panel', 55);
+    assert.equal((await page.locator('.file-tree').boundingBox()).width, filesBefore + 55);
+    await page.getByRole('button', { name: 'note.md', exact: true }).click();
+    await page.locator('.note-outline').waitFor();
+    const contentsBefore = (await page.locator('.note-outline').boundingBox()).width;
+    await dragHandle('Resize contents panel', -45);
+    assert.equal((await page.locator('.note-outline').boundingBox()).width, contentsBefore + 45);
     console.log('headless file icon checks passed');
   } finally {
     if (browser) await browser.close();

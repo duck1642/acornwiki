@@ -21,7 +21,44 @@ from backend.services.filesystem import (
     FileTree,
     FileTreeItem,
     scan_dir,
+    sort_items,
 )
+
+
+class SortOptionsTests(unittest.TestCase):
+    def test_bridge_sorts_without_an_open_note(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            bridge = Bridge()
+            self.addCleanup(bridge._close)
+            workspace_id = bridge.open_workspace(temporary)["workspace_id"]
+            for mode in ("alphabetic", "alphabetic_desc", "modified", "modified_asc", "created", "created_asc"):
+                with self.subTest(mode=mode):
+                    self.assertEqual(bridge.set_tree_sort(workspace_id, mode)["workspace_id"], workspace_id)
+
+    def test_all_six_sort_orders(self) -> None:
+        items: list[FileTreeItem] = [
+            {"name": "b.md", "is_directory": False, "modified_time": 1, "created_time": 3},
+            {"name": "a.md", "is_directory": False, "modified_time": 3, "created_time": 2},
+            {"name": "c.md", "is_directory": False, "modified_time": 2, "created_time": 1},
+        ]
+        for mode, expected in {
+            "alphabetic": ["a.md", "b.md", "c.md"],
+            "alphabetic_desc": ["c.md", "b.md", "a.md"],
+            "modified": ["a.md", "c.md", "b.md"],
+            "modified_asc": ["b.md", "c.md", "a.md"],
+            "created": ["b.md", "a.md", "c.md"],
+            "created_asc": ["c.md", "a.md", "b.md"],
+        }.items():
+            with self.subTest(mode=mode):
+                self.assertEqual([item["name"] for item in sort_items(items, mode)], expected)
+
+    @unittest.skipUnless(os.name == "nt", "Windows creation time")
+    def test_creation_time_is_read_only_with_date_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "note.md"
+            path.touch()
+            self.assertIsNone(scan_dir(path.parent)[0]["created_time"])
+            self.assertEqual(scan_dir(path.parent, True)[0]["created_time"], path.stat().st_birthtime)
 
 
 def wait_until(predicate: Callable[[], bool], timeout: float = 5) -> None:

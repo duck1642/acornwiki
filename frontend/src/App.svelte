@@ -1,6 +1,6 @@
 <script module lang="ts">
-  type SortMode = 'alphabetic' | 'modified'
-  type FileTreeItem = { name: string; is_directory: boolean; modified_time: number | null }
+  type SortMode = 'alphabetic' | 'alphabetic_desc' | 'modified' | 'modified_asc' | 'created' | 'created_asc'
+  type FileTreeItem = { name: string; is_directory: boolean; modified_time: number | null; created_time?: number | null }
   type DirectorySnapshot = {
     workspace_id: string; path: string; items: FileTreeItem[] | null
     loading: boolean; stale: boolean; error: string | null
@@ -70,6 +70,7 @@
   import { onMount, tick } from 'svelte'
   import Icon from './Icon.svelte'
   import PopupMenu from './PopupMenu.svelte'
+  import PanelResizeHandle from './PanelResizeHandle.svelte'
   import { fileIconFor as classifyFileIcon, isFileIconId } from './fileIcons'
   import { setFileIconColors } from './fileIconColors'
   import NoteEditor from './NoteEditor.svelte'
@@ -146,8 +147,11 @@
   let expandableOutlineIds = $derived(collectExpandableIds(outlineTree))
   let allOutlineExpanded = $derived(expandableOutlineIds.length > 0 && expandableOutlineIds.every((id) => expandedOutlineIds.includes(id)))
   let showRightPanel = $derived(Boolean(selectedNote) && outlineOpen)
+  let filesWidth = $state(264)
+  let contentsWidth = $state(224)
   let latestRevision = -1
   let sortMode = $state<SortMode>('alphabetic')
+  let sortMenuOpen = $state(false)
   let directories = $state.raw<Record<string, DirectorySnapshot>>({})
   let expandedFolders = $state<string[]>([])
   let creationFolder = $state('')
@@ -822,15 +826,21 @@
       } finally { moving = false }
     })
   }
-  async function changeSortMode(event: Event) {
-    const target = event.currentTarget
+  async function changeSortMode(mode: SortMode) {
     const api = window.pywebview?.api
     const id = workspaceId
-    if (!(target instanceof HTMLSelectElement) || !api || !id) return
-    if (target.value !== 'alphabetic' && target.value !== 'modified') return
-    sortMode = target.value
-    try { applySnapshot(await api.set_tree_sort(id, sortMode)) }
-    catch (error) { workspaceMessage = 'Could not change sorting.'; console.error(error) }
+    if (!api || !id) return
+    sortMenuOpen = false
+    try {
+      const snapshot = await api.set_tree_sort(id, mode)
+      if (id !== workspaceId) return
+      sortMode = mode
+      workspaceMessage = ''
+      applySnapshot(snapshot)
+    } catch (error) {
+      if (id === workspaceId) workspaceMessage = 'Could not change sorting.'
+      console.error(error)
+    }
   }
   async function saveCreationFolder() {
     const id = workspaceId
@@ -973,7 +983,7 @@
     <button class="menu-sidebar-toggle menu-sidebar-toggle-right" onclick={toggleOutlinePanel} disabled={!selectedNote} aria-label="Toggle contents panel" aria-pressed={outlineOpen} title="Toggle contents panel"><Icon name={outlineOpen ? 'panel-right' : 'panel-right-closed'} /></button>
   </header>
 
-  <div class="workspace-layout" class:files-hidden={!filePanelOpen} class:outline-open={showRightPanel}>
+  <div class="workspace-layout" class:files-hidden={!filePanelOpen} class:outline-open={showRightPanel} style:--files-width={`${filesWidth}px`} style:--contents-width={`${contentsWidth}px`}>
     <nav class="activity-bar" aria-label="Application tools">
       <button class="activity-button" class:active={filePanelOpen} onclick={() => filePanelOpen = true} aria-label="Files" aria-pressed={filePanelOpen} title="Files"><Icon name="folder" /></button>
       <button class="activity-button" disabled aria-label="Graph view" title="Graph view is not available yet"><Icon name="network" /></button>
@@ -996,7 +1006,18 @@
         <div class="tree-heading">
           <h2>Files</h2>
           <div class="tree-actions">
-            <label class="sort-control" title="Sort files"><Icon name="sort" /><select aria-label="Sort files" value={sortMode} onchange={changeSortMode} disabled={!workspaceId}><option value="alphabetic">Alphabetical</option><option value="modified">Modified</option></select></label>
+            <details class="sort-control" bind:open={sortMenuOpen}>
+              <summary aria-label="Sort files" aria-disabled={!workspaceId} title="Sort files" onclick={(event) => { if (!workspaceId) event.preventDefault() }}><Icon name="sort" /></summary>
+              <PopupMenu class="sort-menu" label="Sort files">
+                {#each [[{ mode: 'alphabetic', label: 'File name (A to Z)' }, { mode: 'alphabetic_desc', label: 'File name (Z to A)' }], [{ mode: 'modified', label: 'Modified time (new to old)' }, { mode: 'modified_asc', label: 'Modified time (old to new)' }], [{ mode: 'created', label: 'Created time (new to old)' }, { mode: 'created_asc', label: 'Created time (old to new)' }]] as group, index}
+                  {#if index > 0}<div class="popup-menu-divider"></div>{/if}
+                  {#each group as option}
+                    {@const mode = option.mode as SortMode}
+                    <button class="popup-menu-item" aria-pressed={sortMode === mode} onclick={() => changeSortMode(mode)}>{option.label}{#if sortMode === mode}<span class="popup-menu-mark"><Icon name="check" size={14} /></span>{/if}</button>
+                  {/each}
+                {/each}
+              </PopupMenu>
+            </details>
             <button class="icon-button" onclick={() => refreshTree(null)} disabled={!workspaceId} aria-label="Refresh file tree" title="Refresh file tree"><Icon name="refresh" /></button>
             <button class="icon-button" disabled={!workspaceId || creating} onclick={() => createEntry('note')} aria-label="New note" title="New note"><Icon name="file-plus" /></button>
             <button class="icon-button" disabled={!workspaceId || creating} onclick={() => createEntry('folder')} aria-label="New folder" title="New folder"><Icon name="folder-plus" /></button>
@@ -1074,6 +1095,7 @@
         {:else}
           <p class="tree-status-message">Choose a workspace below to see its files.</p>
         {/if}
+        <PanelResizeHandle side="left" width={filesWidth} onresize={(width) => filesWidth = width} />
         <footer class="sidebar-footer">
           <details bind:this={workspacePicker} class="workspace-picker">
             <summary title={selectedWorkspace ?? 'Select workspace'}><span>{workspaceName || 'Select workspace'}</span><Icon name="chevron-down" size={16} /></summary>
@@ -1148,7 +1170,6 @@
               {canGoForward}
               onNavigateBack={navigateBack}
               onNavigateForward={navigateForward}
-              {workspaceMessage}
               onOpenNote={openNote}
               onStatusChange={updateTabStatus}
               onOutlineChange={updateTabOutline}
@@ -1207,19 +1228,20 @@
           {/if}
         </div>
       {:else if workspaceId}
-        <section class="empty-state"><h2>No note selected</h2><p>Choose a Markdown file from the workspace tree.</p>{#if workspaceMessage}<p class="workspace-message" role="alert">{workspaceMessage}</p>{/if}</section>
+        <section class="empty-state"><h2>No note selected</h2><p>Choose a Markdown file from the workspace tree.</p></section>
       {:else if selectedWorkspace}
-        <section class="empty-state"><h2>No note selected</h2><p>Choose a workspace to see its files.</p>{#if workspaceMessage}<p class="workspace-message" role="alert">{workspaceMessage}</p>{/if}</section>
+        <section class="empty-state"><h2>No note selected</h2><p>Choose a workspace to see its files.</p></section>
       {:else if !loadingWorkspace}
         <section class="empty-state" aria-live="polite">
-          {#if workspaceMessage}<p class="workspace-message" role="alert">{workspaceMessage}</p>{/if}
           <h2>Select a workspace</h2><p>Choose a workspace from the file panel.</p>
         </section>
       {/if}
+      {#if workspaceMessage}<p role={workspaceMessage.startsWith('Could not') ? 'alert' : 'status'} class="workspace-message">{workspaceMessage}</p>{/if}
     </section>
 
     {#if showRightPanel}
       <aside class="note-outline" aria-label="Contents">
+        <PanelResizeHandle side="right" width={contentsWidth} onresize={(width) => contentsWidth = width} />
         <div class="outline-heading">
           <h2 class="outline-title">Contents</h2>
           <button class="outline-collapse-all" aria-label={filterIsActive || allOutlineExpanded ? 'Collapse all headings' : 'Expand all headings'} title={filterIsActive ? 'Clear the filter to change heading expansion' : allOutlineExpanded ? 'Collapse all headings' : 'Expand all headings'} aria-expanded={filterIsActive || allOutlineExpanded} disabled={expandableOutlineIds.length === 0 || filterIsActive} onclick={toggleAllOutline}><Icon name={filterIsActive || allOutlineExpanded ? 'collapse' : 'expand'} size={16} /></button>
