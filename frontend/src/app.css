@@ -126,11 +126,11 @@ a:focus-visible {
 .menu-bar {
   position: relative;
   z-index: 4;
-  flex: 0 0 38px;
+  flex: 0 0 32px;
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 0 8px;
+  padding: 0;
   border-bottom: 1px solid var(--border);
   background: var(--bg-panel);
 }
@@ -155,9 +155,8 @@ a:focus-visible {
 .view-menu-content button.view-menu-reset { margin-top: 4px; border-top: 1px solid var(--border); border-radius: 0 0 4px 4px; color: var(--ink-muted); }
 .view-menu-content button:hover { background: var(--bg-hover); }
 .view-menu-content button[aria-pressed='true'] { color: var(--accent); }
-.menu-sidebar-toggle { width: 29px; height: 28px; display: inline-flex; align-items: center; justify-content: center; margin-right: 4px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--ink-muted); }
+.menu-sidebar-toggle { width: 42px; height: 28px; display: inline-flex; align-items: center; justify-content: center; margin-right: 0; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--ink-muted); }
 .menu-sidebar-toggle:hover { background: var(--bg-hover); color: var(--ink); }
-.menu-sidebar-toggle[aria-pressed='true'] { color: var(--accent); }
 .menu-sidebar-toggle svg { display: block; width: 17px; height: 17px; }
 
 .connection-status {
@@ -309,7 +308,6 @@ a:focus-visible {
 .document-tabs { flex: 0 0 36px; min-width: 0; display: flex; align-items: stretch; border-bottom: 1px solid var(--border); background: var(--bg-panel); }
 .document-tabs-list { flex: 1 1 auto; min-width: 0; display: flex; align-items: stretch; gap: 2px; overflow: auto hidden; padding: 4px 6px 0 8px; scrollbar-width: thin; }
 .document-tabs-actions { flex: 0 0 auto; display: flex; align-items: center; padding: 0 6px; }
-.outline-toggle-btn[aria-pressed='true'] { color: var(--accent); }
 .document-tab { min-width: 76px; max-width: 240px; display: flex; flex: 0 0 auto; align-items: center; gap: 2px; padding: 0 3px 0 8px; border: 1px solid transparent; border-bottom: 0; border-radius: 5px 5px 0 0; color: var(--ink-muted); }
 .document-tab.active { position: relative; z-index: 1; margin-bottom: -1px; padding-bottom: 1px; border-color: var(--border); background: var(--bg-panel); color: var(--ink); font-weight: 600; }
 .document-tab-select { min-width: 0; min-height: 29px; display: flex; flex: 1 1 auto; align-items: center; gap: 6px; overflow: hidden; padding: 3px 4px; border: 0; background: transparent; color: inherit; text-align: left; font-size: 11px; }
@@ -389,15 +387,16 @@ a:focus-visible {
 
 .tree-viewport { flex: 1; min-height: 0; overflow: auto; outline: none; }
 .tree-list { margin: 0; padding: 0; list-style: none; }
-.tree-entry { height: 32px; overflow: hidden; }
-.tree-row { display: flex; height: 32px; align-items: center; gap: 3px; }
+.tree-entry { position: relative; height: 28px; overflow: hidden; }
+.tree-indent-guide { position: absolute; top: 0; bottom: 0; z-index: 1; width: 1px; background: var(--border-strong); pointer-events: none; }
+.tree-row { display: flex; height: 28px; align-items: center; gap: 3px; }
 
 .tree-folder,
 .tree-file {
   display: flex;
   flex: 1;
   min-width: 0;
-  height: 28px;
+  height: 26px;
   align-items: center;
   gap: 7px;
   padding: 3px 5px;
@@ -413,9 +412,10 @@ a:focus-visible {
 .tree-file:hover { background: var(--bg-hover); color: var(--ink); }
 .tree-folder { gap: 7px; }
 .tree-file { padding-left: 5px; }
-.tree-note { color: var(--ink); }
-.tree-note.selected { color: var(--accent); font-weight: 650; }
-.tree-disclosure { width: 16px; height: 16px; flex: 0 0 16px; color: var(--ink-faint); display: inline-flex; align-items: center; justify-content: center; }
+.tree-note.selected { color: var(--accent); }
+.tree-disclosure { width: 16px; height: 16px; flex: 0 0 16px; color: var(--ink-muted); display: inline-flex; align-items: center; justify-content: center; }
+.tree-disclosure svg, .outline-caret svg { stroke-width: 2.1; }
+.tree-disclosure.collapsed svg, .outline-caret[aria-expanded="false"] svg { transform: translateX(-0.5px); }
 .tree-icon { flex: 0 0 16px; color: var(--ink-muted); }
 .file-icon-markdown, .file-icon-file, .file-icon-file-text { color: var(--ink-muted); }
 .file-icon-pdf { color: var(--file-icon-pdf, var(--ink-muted)); }
@@ -431,11 +431,8 @@ a:focus-visible {
 .file-icon-document { color: var(--file-icon-document, var(--ink-muted)); }
 .file-icon-code { color: var(--file-icon-code, var(--ink-muted)); }
 .tree-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.move-button { width: 26px; height: 26px; opacity: 0.4; }
-.tree-row:hover .move-button,
-.tree-row:focus-within .move-button { opacity: 1; }
 
-.tree-status { display: flex; height: 32px; align-items: center; gap: 6px; color: var(--ink-muted); font-size: 11px; }
+.tree-status { display: flex; height: 28px; align-items: center; gap: 6px; color: var(--ink-muted); font-size: 11px; }
 .tree-status span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .text-button {
@@ -604,7 +601,7 @@ a:focus-visible {
 .outline-nav { min-height: 0; overflow: auto; padding: 2px 10px 14px; }
 .outline-nav ul { margin: 0; padding: 0; list-style: none; }
 .outline-row { min-width: 0; display: flex; align-items: center; gap: 2px; margin: 0; }
-.outline-caret { width: 19px; height: 24px; flex: 0 0 19px; padding: 0; border: 0; border-radius: 3px; background: transparent; color: var(--ink-faint); font-size: 11px; }
+.outline-caret { width: 19px; height: 24px; flex: 0 0 19px; padding: 0; border: 0; border-radius: 3px; background: transparent; color: var(--ink-muted); display: inline-flex; align-items: center; justify-content: center; }
 .outline-caret:hover:not(:disabled) { background: var(--bg-hover); color: var(--ink); }
 .outline-caret:disabled { opacity: 0.5; }
 .outline-caret-spacer { width: 19px; flex: 0 0 19px; }
@@ -703,7 +700,7 @@ a:focus-visible {
   .workspace-layout.files-hidden > .note-outline { grid-column: 2; grid-row: 2; }
   .tree-entry,
   .tree-row,
-  .tree-status { height: 32px; }
+  .tree-status { height: 28px; }
   .note-toolbar { flex-basis: 40px; padding: 0 9px; gap: 6px; }
   .document-tabs { flex-basis: 34px; padding-right: 5px; padding-left: 5px; }
   .document-tab { max-width: 160px; padding-left: 5px; }
@@ -725,7 +722,7 @@ a:focus-visible {
 
 @media (max-width: 420px) {
   .menu-item { padding: 4px 5px; font-size: 10px; }
-  .menu-sidebar-toggle { width: 26px; margin-right: 1px; }
+  .menu-sidebar-toggle { width: 38px; margin-right: 0; }
   .connection-status { max-width: 92px; font-size: 10px; }
   .appearance-group button { padding-right: 4px; padding-left: 4px; font-size: 9px; }
   .surface-group button { padding-right: 6px; padding-left: 6px; }

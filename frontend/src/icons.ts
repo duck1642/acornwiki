@@ -1,6 +1,7 @@
 // Static SVG paths from Lucide, Tabler and the custom new-note icon.
 export const icons = {
-  "panel-left": "<rect width=\"18\" height=\"18\" x=\"3\" y=\"3\" rx=\"2\" />\n  <path d=\"M9 3v18\" />",
+  "panel-left-closed": "<rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"2.5\" /><path d=\"M8 6.5v11\" />",
+  "panel-left": "<rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"2.5\" /><rect x=\"6\" y=\"6.5\" width=\"3\" height=\"11\" rx=\"1\" fill=\"currentColor\" stroke=\"none\" />",
   "arrow-left": "<path d=\"m12 19-7-7 7-7\" />\n  <path d=\"M19 12H5\" />",
   "arrow-right": "<path d=\"M5 12h14\" />\n  <path d=\"m12 5 7 7-7 7\" />",
   "code": "<path d=\"m18 16 4-4-4-4\" />\n  <path d=\"m6 8-4 4 4 4\" />\n  <path d=\"m14.5 4-5 16\" />",
@@ -13,7 +14,8 @@ export const icons = {
   "markdown": "<path d=\"M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z\" />\n  <path d=\"M14 2v5a1 1 0 0 0 1 1h5\" />\n  <path d=\"M10 9H8\" />\n  <path d=\"M16 13H8\" />\n  <path d=\"M16 17H8\" />",
   "move": "<path d=\"M3 21v-4a3 3 0 0 1 3 -3h5\" />\n  <path d=\"M8 17l3 -3l-3 -3\" />\n  <path d=\"M3 11v-5a2 2 0 0 1 2 -2h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1 -2 2h-8\" />",
   "network": "<path d=\"M10 19a2 2 0 1 0 -4 0a2 2 0 0 0 4 0\" />\n  <path d=\"M18 5a2 2 0 1 0 -4 0a2 2 0 0 0 4 0\" />\n  <path d=\"M10 5a2 2 0 1 0 -4 0a2 2 0 0 0 4 0\" />\n  <path d=\"M6 12a2 2 0 1 0 -4 0a2 2 0 0 0 4 0\" />\n  <path d=\"M18 19a2 2 0 1 0 -4 0a2 2 0 0 0 4 0\" />\n  <path d=\"M14 12a2 2 0 1 0 -4 0a2 2 0 0 0 4 0\" />\n  <path d=\"M22 12a2 2 0 1 0 -4 0a2 2 0 0 0 4 0\" />\n  <path d=\"M6 12h4\" />\n  <path d=\"M14 12h4\" />\n  <path d=\"M15 7l-2 3\" />\n  <path d=\"M9 7l2 3\" />\n  <path d=\"M11 14l-2 3\" />\n  <path d=\"M13 14l2 3\" />",
-  "panel-right": "<rect width=\"18\" height=\"18\" x=\"3\" y=\"3\" rx=\"2\" />\n  <path d=\"M15 3v18\" />",
+  "panel-right-closed": "<rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"2.5\" /><path d=\"M16 6.5v11\" />",
+  "panel-right": "<rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"2.5\" /><rect x=\"15\" y=\"6.5\" width=\"3\" height=\"11\" rx=\"1\" fill=\"currentColor\" stroke=\"none\" />",
   "pdf": "<path d=\"M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z\" />\n  <path d=\"M14 2v5a1 1 0 0 0 1 1h5\" />\n  <path d=\"M10 9H8\" />\n  <path d=\"M16 13H8\" />\n  <path d=\"M16 17H8\" />",
   "refresh": "<path d=\"M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8\" />\n  <path d=\"M21 3v5h-5\" />\n  <path d=\"M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16\" />\n  <path d=\"M8 16H3v5\" />",
   "settings": "<path d=\"M10.325 4.317c.426 -1.756 2.924 -1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543 -.94 3.31 .826 2.37 2.37a1.724 1.724 0 0 0 1.065 2.572c1.756 .426 1.756 2.924 0 3.35a1.724 1.724 0 0 0 -1.066 2.573c.94 1.543 -.826 3.31 -2.37 2.37a1.724 1.724 0 0 0 -2.572 1.065c-.426 1.756 -2.924 1.756 -3.35 0a1.724 1.724 0 0 0 -2.573 -1.066c-1.543 .94 -3.31 -.826 -2.37 -2.37a1.724 1.724 0 0 0 -1.065 -2.572c-1.756 -.426 -1.756 -2.924 0 -3.35a1.724 1.724 0 0 0 1.066 -2.573c-.94 -1.543 .826 -3.31 2.37 -2.37c1 .608 2.296 .07 2.572 -1.065\" />\n  <path d=\"M9 12a3 3 0 1 0 6 0a3 3 0 0 0 -6 0\" />",

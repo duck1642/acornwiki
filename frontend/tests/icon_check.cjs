@@ -66,7 +66,7 @@ const net = require('node:net');
         watcher_error: null,
         directories: [{
           workspace_id: 'workspace-1', path: '', items, loading: false, stale: false, error: null,
-        }],
+        }, { workspace_id: 'workspace-1', path: 'folder', items: [{ name: 'child.md', is_directory: false, modified_time: null }], loading: false, stale: false, error: null }],
       });
 
       window.noteDisk = notePath => notes.get(notePath)?.content ?? null;
@@ -139,6 +139,9 @@ const net = require('node:net');
     }
     const sidebarToggle = page.getByRole('button', { name: 'Toggle files panel' });
     const filesButton = page.getByRole('button', { name: 'Files', exact: true });
+    const sidebarRect = await sidebarToggle.boundingBox();
+    const activityRect = await page.locator('.activity-bar').boundingBox();
+    assert.ok(Math.abs((sidebarRect.x + sidebarRect.width / 2) - (activityRect.x + activityRect.width / 2)) < 1, 'Sidebar toggle should align with activity bar');
     await filesButton.click();
     assert.equal(await page.locator('.file-tree').count(), 1, 'Files button must not close the sidebar');
     await sidebarToggle.click();
@@ -147,6 +150,12 @@ const net = require('node:net');
     assert.equal(await page.locator('.file-tree').count(), 1, 'Files button opens the sidebar');
     const folder = page.locator('.tree-folder').first();
     assert.equal(await folder.locator('svg').count(), 1);
+    await folder.click();
+    const childRow = page.locator('.tree-entry').filter({ has: page.locator('button.tree-file[title="child.md"]') });
+    assert.equal(await childRow.locator('.tree-indent-guide').count(), 1, 'Nested file should show one indent guide');
+    const guide = await childRow.locator('.tree-indent-guide').boundingBox();
+    const folderArrow = await folder.locator('svg').boundingBox();
+    assert.ok(Math.abs(guide.x - (folderArrow.x + folderArrow.width / 2)) < 1, 'Indent guide should align with parent arrow');
     const arrow = await folder.locator('svg').boundingBox();
     const fileIcon = await page.locator('button.tree-file[title="note.md"] svg').boundingBox();
     assert.ok(Math.abs(arrow.x - fileIcon.x) < 1, 'Folder arrow and file icon should align');

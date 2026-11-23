@@ -6,7 +6,7 @@ function luminance(rgb: RGB): number {
   return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
 }
 function color(hue: number, lightness: number): RGB {
-  const l = lightness / 100, a = 0.6 * Math.min(l, 1 - l)
+  const l = lightness / 100, a = 0.4 * Math.min(l, 1 - l)
   const channel = (n: number) => { const k = (n + hue / 30) % 12; return Math.round(255 * (l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1)))) }
   return [channel(0), channel(8), channel(4)]
 }

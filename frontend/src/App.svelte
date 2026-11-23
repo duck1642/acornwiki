@@ -162,7 +162,7 @@
   let watcherError = $state<string | null>(null)
   let visibleTree = $derived(buildVisibleTree())
   let rootDirectory = $derived(directories[''])
-  const rowHeight = 32
+  const rowHeight = 28
   const overscan = 8
   let scrollTop = $state(0)
   let viewportHeight = $state(0)
@@ -930,7 +930,7 @@
 <main class="app-shell">
   <header class="menu-bar" aria-label="Application menu">
     <div class="menu-items" aria-label="Menus">
-      <button class="menu-sidebar-toggle" onclick={toggleFilePanel} aria-label="Toggle files panel" aria-pressed={filePanelOpen} title="Toggle files panel"><Icon name="panel-left" /></button>
+      <button class="menu-sidebar-toggle" onclick={toggleFilePanel} aria-label="Toggle files panel" aria-pressed={filePanelOpen} title="Toggle files panel"><Icon name={filePanelOpen ? 'panel-left' : 'panel-left-closed'} /></button>
       <button class="menu-item" disabled title="This menu is not available yet">File</button>
       <button class="menu-item" disabled title="This menu is not available yet">Edit</button>
       <details class="view-menu" bind:open={viewMenuOpen}>
@@ -1005,11 +1005,14 @@
               <li aria-hidden="true" style={`height: ${startRow * rowHeight}px`}></li>
               {#each renderedRows as row, index (row.kind === 'item' ? `item:${row.path}` : `status:${row.path}`)}
                 <li class="tree-entry" data-row-index={startRow + index}>
+                  {#each Array(row.depth) as _, level}
+                    <span class="tree-indent-guide" aria-hidden="true" style={`left: ${21 + level * 20}px`}></span>
+                  {/each}
                   {#if row.kind === 'item'}
                     <div class="tree-row" style={`padding-left: ${8 + row.depth * 20}px`}>
                       {#if row.item.is_directory}
                         <button class="tree-folder" onclick={() => toggleFolder(row.path)} onkeydown={handleTreeKeydown} aria-expanded={expandedFolders.includes(row.path)}>
-                          <span class="tree-disclosure"><Icon name={expandedFolders.includes(row.path) ? 'chevron-down' : 'chevron-right'} /></span>
+                          <span class="tree-disclosure" class:collapsed={!expandedFolders.includes(row.path)}><Icon name={expandedFolders.includes(row.path) ? 'chevron-down' : 'chevron-right'} /></span>
                           <span class="tree-label" title={row.item.name}>{row.item.name}</span>
                         </button>
                       {:else if row.path.toLowerCase().endsWith('.md')}
@@ -1032,7 +1035,6 @@
                           <span class="tree-label">{row.item.name}</span>
                         </button>
                       {/if}
-                      <button class="icon-button move-button" aria-label={`Move or rename ${row.item.name}`} title={`Move or rename ${row.item.name}`} onclick={() => moveEntry(row.path)} onkeydown={handleTreeKeydown}><Icon name="move" size={14} /></button>
                     </div>
                   {:else}
                     <div class="tree-status" style={`padding-left: ${8 + row.depth * 20}px`}>
@@ -1108,7 +1110,7 @@
           </div>
           {#if selectedNote}
             <div class="document-tabs-actions">
-              <button class="icon-button outline-toggle-btn" onclick={toggleOutlinePanel} aria-label="Toggle contents panel" aria-pressed={outlineOpen} title="Toggle contents panel"><Icon name="panel-right" /></button>
+              <button class="icon-button outline-toggle-btn" onclick={toggleOutlinePanel} aria-label="Toggle contents panel" aria-pressed={outlineOpen} title="Toggle contents panel"><Icon name={outlineOpen ? 'panel-right' : 'panel-right-closed'} /></button>
             </div>
           {/if}
         </div>
@@ -1251,7 +1253,7 @@
     {@const expanded = filterIsActive || expandedOutlineIds.includes(heading.id)}
     <li class="outline-row" style={`padding-left: ${depth * 14}px`}>
       {#if hasChildren}
-        <button class="outline-caret" aria-label={expanded ? `Collapse ${heading.label}` : `Expand ${heading.label}`} aria-expanded={expanded} disabled={filterIsActive} onclick={() => toggleOutlineNode(heading.id)}><Icon name={expanded ? 'chevron-down' : 'chevron-right'} size={14} /></button>
+        <button class="outline-caret" aria-label={expanded ? `Collapse ${heading.label}` : `Expand ${heading.label}`} aria-expanded={expanded} disabled={filterIsActive} onclick={() => toggleOutlineNode(heading.id)}><Icon name={expanded ? 'chevron-down' : 'chevron-right'} /></button>
       {:else}
         <span class="outline-caret-spacer" aria-hidden="true"></span>
       {/if}
