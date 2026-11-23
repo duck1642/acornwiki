@@ -12,6 +12,8 @@ from urllib.request import urlopen
 from backend.app.bridge import Bridge, SharedState
 from backend.modules.notes import (
     NoteConflictError,
+    list_markdown_notes,
+    markdown_name,
     read_note,
     resolve_note_link,
     save_note,
@@ -20,6 +22,17 @@ from backend.services.media import MediaServer
 
 
 class NoteTests(unittest.TestCase):
+    def test_markdown_extension_as_filename_is_supported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            (root / ".md").write_text("note", encoding="utf-8")
+            self.assertEqual(read_note(root, ".md")["content"], "note")
+            self.assertEqual(list_markdown_notes(root), [".md"])
+        for name in (".md", ".MD"):
+            with self.subTest(name=name):
+                self.assertEqual(markdown_name(name), name)
+        self.assertEqual(markdown_name("note"), "note.md")
+
     def setUp(self) -> None:
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)

@@ -39,7 +39,7 @@ def list_markdown_notes(root: Path) -> list[str]:
             if path.is_symlink() or path.is_junction():
                 raise ValueError(f"Cannot plan across a link or junction: {path}")
         for name in files:
-            if Path(name).suffix.lower() == ".md":
+            if name.lower().endswith(".md"):
                 paths.append((parent / name).relative_to(root).as_posix())
     return sorted(paths)
 
@@ -76,7 +76,9 @@ class NoteConflictError(Exception):
     """Signal that the file no longer matches the version being edited."""
 
 
-def validate_note_rewrites(root: Path, rewrites: list[NoteSnapshot]) -> None:
+def validate_note_rewrites(
+    root: Path, rewrites: list[NoteSnapshot], versions: dict[str, str] | None = None
+) -> None:
     """Check planned note versions before starting a multi-file operation."""
     if not isinstance(rewrites, list):
         raise TypeError("Note rewrites must be a list")
@@ -93,6 +95,10 @@ def validate_note_rewrites(root: Path, rewrites: list[NoteSnapshot]) -> None:
         if key in seen:
             raise ValueError("A note cannot appear twice in the plan")
         seen.add(key)
+        if versions is not None:
+            if versions.get(rewrite["path"]) != rewrite["version"]:
+                raise ValueError("Rewrites must belong to the scanned note versions")
+            continue
         try:
             current = path.read_bytes()
         except FileNotFoundError as error:
@@ -103,7 +109,7 @@ def validate_note_rewrites(root: Path, rewrites: list[NoteSnapshot]) -> None:
             raise NoteConflictError(f"Note changed on disk: {rewrite['path']}")
 
 
-def validate_note_scan(root: Path, snapshots: list[NoteVersion]) -> None:
+def validate_note_scan(root: Path, snapshots: list[NoteVersion]) -> dict[str, str]:
     """Reject a plan if any scanned note changed or the set of notes differs."""
     if not isinstance(snapshots, list):
         raise TypeError("Note versions must be a list")
@@ -132,11 +138,16 @@ def validate_note_scan(root: Path, snapshots: list[NoteVersion]) -> None:
     }
     if seen != current_paths:
         raise NoteConflictError("The workspace note list changed")
+    return {snapshot["path"]: snapshot["version"] for snapshot in snapshots}
 
 
 def markdown_name(name: str) -> str:
     """Add the Markdown extension when the supplied name does not have it."""
-    if not isinstance(name, str) or not name.strip() or name.endswith((" ", ".")):
+    if (
+        not isinstance(name, str)
+        or not name.strip()
+        or name.endswith((" ", "."))
+    ):
         raise ValueError("A note name is required")
     return name if name.lower().endswith(".md") else f"{name}.md"
 
@@ -165,7 +176,7 @@ def note_path(root: Path, relative: str) -> Path:
     if not isinstance(relative, str) or not relative:
         raise ValueError("Note path must be a non-empty string")
     path = Path(relative)
-    if path.anchor or ".." in path.parts or path.suffix.lower() != ".md":
+    if path.anchor or ".." in path.parts or not path.name.lower().endswith(".md"):
         raise ValueError("Note must be a workspace-relative Markdown file")
     resolved = (root / path).resolve()
     try:

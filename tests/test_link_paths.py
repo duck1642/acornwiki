@@ -24,6 +24,22 @@ from backend.modules.notes import (
 
 
 class LinkPathTests(unittest.TestCase):
+    def test_escaped_entity_and_leading_space_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            self.assertEqual(
+                resolve_moved_targets(root, "note.md", "a&b.md", "new.md", [r"a\&amp;b.md"]),
+                ["new.md"],
+            )
+            self.assertEqual(
+                resolve_moved_targets(root, "note.md", " old.md", "new.md", ["< old.md>"]),
+                ["<new.md>"],
+            )
+            self.assertEqual(
+                resolve_moved_targets(root, "note.md", "other.md", "new.md", ["< old.md>"]),
+                [None],
+            )
+
     def test_reentered_folder_link_resolves_after_rename(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
@@ -79,8 +95,10 @@ class LinkPathTests(unittest.TestCase):
             snapshots = [
                 {"path": n["path"], "version": n["version"]} for n in (first, second)
             ]
-            validate_note_scan(root, snapshots)
-            validate_note_rewrites(root, [first])
+            versions = validate_note_scan(root, snapshots)
+            validate_note_rewrites(root, [first], versions)
+            with self.assertRaises(ValueError):
+                validate_note_rewrites(root, [{**first, "version": "wrong"}], versions)
             (root / "b.md").write_text("changed", encoding="utf-8")
             with self.assertRaises(NoteConflictError):
                 validate_note_scan(root, snapshots)

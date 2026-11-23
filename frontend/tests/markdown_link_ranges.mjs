@@ -28,4 +28,5 @@ assert.deepEqual(markdownLinkRanges('[x](a\\(b\\).md)').map(range => range.targe
 assert.deepEqual(markdownLinkRanges('[x](old.md)\n\n```\n[skip](no.md)').map(range => range.target), ['old.md'])
 assert.deepEqual(markdownLinkRanges('data\r\r    [code](old.md)\r\r[working](old.md)').map(range => range.target), ['old.md'])
 assert.throws(() => markdownLinkRanges('https://host/[name](old.md)'), /automatic web address/)
+assert.deepEqual(markdownLinkRanges('xwww.example.com/[name](old.md)').map(range => range.target), ['old.md'])
 console.log('Markdown link source range checks passed')

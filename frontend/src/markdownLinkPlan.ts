@@ -1,10 +1,5 @@
 import { markdownLinkRanges, type MarkdownLinkRange } from './markdownLinkRanges'
 
-/** Keep the exact source ranges alongside the targets sent to Python. */
-export function collectMarkdownTargets(source: string): MarkdownLinkRange[] {
-  return markdownLinkRanges(source)
-}
-
 /** Apply replacements returned in the same order as the collected targets. */
 export function applyMarkdownTargetReplacements(
   source: string,
@@ -42,7 +37,7 @@ interface PlanBridge {
 
 /** Prepare note rewrites without changing any workspace file. */
 export async function planMoveLinks(
-  api: PlanBridge, workspaceId: string, source: string, destination: string, signal?: AbortSignal, updateLinks = true,
+  api: PlanBridge, workspaceId: string, source: string, destination: string, signal?: AbortSignal,
 ): Promise<{ rewrites: NoteSnapshot[]; snapshots: { path: string; version: string }[] }> {
   const paths = await api.list_plan_notes(workspaceId)
   signal?.throwIfAborted()
@@ -55,7 +50,7 @@ export async function planMoveLinks(
     signal?.throwIfAborted()
     if (batch.next_index <= 0 || batch.next_index > pending.length || batch.notes.length !== batch.next_index) throw new Error('Invalid note batch')
     snapshots.push(...batch.notes.map(({ path, version }) => ({ path, version })))
-    const candidates = updateLinks ? batch.notes.map(note => ({ note, ranges: collectMarkdownTargets(note.content) })).filter(item => item.ranges.length) : []
+    const candidates = batch.notes.map(note => ({ note, ranges: markdownLinkRanges(note.content) })).filter(item => item.ranges.length)
     const replacements = candidates.length ? await api.plan_link_targets_batch(workspaceId, source, destination, candidates.map(({ note, ranges }) => ({ path: note.path, targets: ranges.map(range => range.target) }))) : []
     signal?.throwIfAborted()
     if (replacements.length !== candidates.length) throw new Error('Invalid target batch')

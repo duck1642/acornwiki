@@ -231,6 +231,14 @@ class Bridge:
         """Calculate target changes for a bounded group of Markdown notes."""
         if not isinstance(notes, list) or len(notes) > 100:
             raise ValueError("Expected at most 100 notes")
+        if any(
+            not isinstance(note, dict)
+            or not isinstance(note.get("path"), str)
+            or not isinstance(note.get("targets"), list)
+            or not all(isinstance(target, str) for target in note["targets"])
+            for note in notes
+        ):
+            raise ValueError("Invalid note targets")
         with self._lock:
             root = self._require_tree(workspace_id).root
             return [
@@ -247,11 +255,8 @@ class Bridge:
         """Check a plan against the workspace without moving or writing files."""
         with self._lock:
             root = self._require_tree(workspace_id).root
-            validate_note_scan(root, snapshots)
-            validate_note_rewrites(root, rewrites)
-            versions = {item["path"]: item["version"] for item in snapshots}
-            if any(versions.get(item["path"]) != item["version"] for item in rewrites):
-                raise ValueError("Rewrites must belong to the scanned note versions")
+            versions = validate_note_scan(root, snapshots)
+            validate_note_rewrites(root, rewrites, versions)
 
     def commit_move(
         self,
@@ -271,8 +276,8 @@ class Bridge:
                 raise ValueError("Choose a different destination")
             if (
                 not is_directory
-                and source_path.suffix.lower() == ".md"
-                and destination_path.suffix.lower() != ".md"
+                and source_path.name.lower().endswith(".md")
+                and not destination_path.name.lower().endswith(".md")
             ):
                 raise ValueError("A Markdown note must keep its .md extension")
             if snapshots is None:

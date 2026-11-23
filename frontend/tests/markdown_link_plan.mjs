@@ -3,11 +3,12 @@ import { spawnSync } from 'node:child_process'
 import { createServer } from 'vite'
 
 const server = await createServer({ server: { middlewareMode: true }, appType: 'custom' })
-const { applyMarkdownTargetReplacements, collectMarkdownTargets, planMoveLinks } = await server.ssrLoadModule('/src/markdownLinkPlan.ts')
+const { applyMarkdownTargetReplacements, planMoveLinks } = await server.ssrLoadModule('/src/markdownLinkPlan.ts')
+const { markdownLinkRanges } = await server.ssrLoadModule('/src/markdownLinkRanges.ts')
 await server.close()
 
 const source = '😀 [first](a.md#part) ![image](<some file.png>)\r\n\r\n[ref][id]\r\n\r\n[id]: a.md "Title"\r\n\r\n`[code](a.md)`\r\n'
-const ranges = collectMarkdownTargets(source)
+const ranges = markdownLinkRanges(source)
 assert.deepEqual(ranges.map(({ target }) => target), ['a.md#part', '<some file.png>', 'a.md'])
 assert.equal(
   applyMarkdownTargetReplacements(source, ranges, ['../new.md#part', null, '../new.md']),

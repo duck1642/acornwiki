@@ -39,11 +39,24 @@ def _decode_before_fragment(value: str) -> tuple[str, str]:
     chunks: list[str] = []
     start = 0
     for match in _DESTINATION_TOKEN.finditer(value):
+        if match.start() < start:
+            continue
         chunks.append(value[start : match.start()])
         token = match[0]
         if token == "#":
             return "".join(chunks), value[match.start() :]
         if match.group(1) is not None:
+            # Marked removes Markdown escapes before the browser decodes entities.
+            entity = None
+            if match[1] == "&":
+                entity = re.match(
+                    r"(?:#(?:[xX][0-9a-fA-F]+|[0-9]+)|[a-zA-Z][a-zA-Z0-9]+);",
+                    value[match.end() :],
+                )
+            if entity and (entity[0].startswith("#") or entity[0] in html.entities.html5):
+                chunks.append(html.unescape("&" + entity[0]))
+                start = match.end() + len(entity[0])
+                continue
             chunks.append(match[1])
         elif token.startswith("&#") or token[1:] in html.entities.html5:
             chunks.append(html.unescape(token))
@@ -63,19 +76,22 @@ def parse_markdown_target(
     angled = raw_target.startswith("<") and raw_target.endswith(">")
     inner = raw_target[1:-1] if angled else raw_target
     decoded, fragment = _decode_before_fragment(inner)
-    parts = urlsplit(decoded)
+    # urlsplit strips leading spaces; an angled Markdown destination can contain them.
+    leading_space = bool(decoded and ord(decoded[0]) <= 32)
+    parts = urlsplit("./" + decoded if leading_space else decoded)
     if parts.scheme or parts.netloc or not parts.path:
         return None
     has_query = "?" in decoded.split("#", 1)[0]
     # Reject fragment delimiters that cannot be split from the raw text safely.
-    if not has_query and decoded != parts.path:
+    path_value = parts.path[2:] if leading_space else parts.path
+    if not has_query and decoded != path_value:
         raise ValueError("Cannot preserve this Markdown fragment safely")
     try:
-        relative_path = unquote(parts.path, errors="strict")
+        relative_path = unquote(path_value, errors="strict")
     except UnicodeDecodeError as error:
         raise ValueError("Link path has invalid UTF-8 encoding") from error
     path, _ = resolve_note_link(root, note, parts.path)
-    encoded_unicode = bool(re.search(r"%(?:[c-fC-F][0-9a-fA-F])", parts.path))
+    encoded_unicode = bool(re.search(r"%(?:[c-fC-F][0-9a-fA-F])", path_value))
     return MarkdownTarget(
         path, relative_path, angled, encoded_unicode, fragment, has_query
     )

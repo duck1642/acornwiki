@@ -27,7 +27,7 @@ export function markdownLinkRanges(source: string): MarkdownLinkRange[] {
       if (parent !== 'Link' && parent !== 'Image' && parent !== 'LinkReference') return
       const parentNode = node.node.parent
       const prefix = normalized.slice(0, parentNode?.from ?? node.from)
-      if (/(?:https?:\/\/|www\.)[^\s<>]*$/i.test(prefix)) throw new Error('Cannot safely update a link inside an automatic web address')
+      if (/(?<![\p{L}\p{N}_])(?:https?:\/\/|www\.)[^\s<>]*$/iu.test(prefix)) throw new Error('Cannot safely update a link inside an automatic web address')
       const from = offsets[node.from], to = offsets[node.to]
       ranges.push({ from, to, target: source.slice(from, to) })
     },
