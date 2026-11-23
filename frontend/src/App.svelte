@@ -69,6 +69,7 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
   import Icon from './Icon.svelte'
+  import PopupMenu from './PopupMenu.svelte'
   import { fileIconFor as classifyFileIcon, isFileIconId } from './fileIcons'
   import { setFileIconColors } from './fileIconColors'
   import NoteEditor from './NoteEditor.svelte'
@@ -953,20 +954,23 @@
       <button class="menu-item" disabled title="This menu is not available yet">Edit</button>
       <details class="view-menu" bind:open={viewMenuOpen}>
         <summary class="menu-item">View</summary>
-        <div class="view-menu-content" role="group" aria-label="Session view options">
+        <PopupMenu class="view-menu-content" label="Session view options">
           <strong>Document surface</strong>
-          <button aria-pressed={effectiveSurface === 'framed'} onclick={() => { sessionSurface = 'framed'; viewMenuOpen = false }}>Framed</button>
-          <button aria-pressed={effectiveSurface === 'seamless'} onclick={() => { sessionSurface = 'seamless'; viewMenuOpen = false }}>Seamless</button>
-          <strong class="view-menu-divider">Page width</strong>
+          <button class="popup-menu-item" aria-pressed={effectiveSurface === 'framed'} onclick={() => { sessionSurface = 'framed'; viewMenuOpen = false }}>Framed{#if effectiveSurface === 'framed'}<span class="popup-menu-mark"><Icon name="check" size={14} /></span>{/if}</button>
+          <button class="popup-menu-item" aria-pressed={effectiveSurface === 'seamless'} onclick={() => { sessionSurface = 'seamless'; viewMenuOpen = false }}>Seamless{#if effectiveSurface === 'seamless'}<span class="popup-menu-mark"><Icon name="check" size={14} /></span>{/if}</button>
+          <div class="popup-menu-divider"></div>
+          <strong>Page width</strong>
           {#each pageWidthPresets as preset (preset.value)}
-            <button aria-pressed={effectivePageWidth === preset.value} title={preset.title} onclick={() => { sessionPageWidth = preset.value; viewMenuOpen = false }}>{preset.label}</button>
+            <button class="popup-menu-item" aria-pressed={effectivePageWidth === preset.value} title={preset.title} onclick={() => { sessionPageWidth = preset.value; viewMenuOpen = false }}>{preset.label}{#if effectivePageWidth === preset.value}<span class="popup-menu-mark"><Icon name="check" size={14} /></span>{/if}</button>
           {/each}
-          <button class="view-menu-reset" onclick={() => { sessionSurface = null; sessionPageWidth = null; viewMenuOpen = false }}>Use workspace default</button>
-        </div>
+          <div class="popup-menu-divider"></div>
+          <button class="popup-menu-item" onclick={() => { sessionSurface = null; sessionPageWidth = null; viewMenuOpen = false }}>Use workspace default</button>
+        </PopupMenu>
       </details>
       <button class="menu-item" disabled title="This menu is not available yet">Navigate</button>
       <button class="menu-item" disabled title="This menu is not available yet">Help</button>
     </div>
+    <button class="menu-sidebar-toggle menu-sidebar-toggle-right" onclick={toggleOutlinePanel} disabled={!selectedNote} aria-label="Toggle contents panel" aria-pressed={outlineOpen} title="Toggle contents panel"><Icon name={outlineOpen ? 'panel-right' : 'panel-right-closed'} /></button>
   </header>
 
   <div class="workspace-layout" class:files-hidden={!filePanelOpen} class:outline-open={showRightPanel}>
@@ -977,13 +981,13 @@
       <div class="activity-spacer"></div>
       <details bind:open={settingsOpen} class="settings-menu">
         <summary class="activity-button" aria-label="Settings" title="Settings"><Icon name="settings" /></summary>
-        <div class="settings-content">
-          <strong>Quick settings</strong>
-          <button class="text-button quick-settings-open" onclick={openSettingsTab}>Open Settings</button>
-          <label class="quick-setting"><input type="checkbox" checked={editorPreferences.autosave} disabled={!editorPreferencesLoaded || editorPreferenceSaving.autosave} onchange={(event) => setEditorPreference('autosave', event.currentTarget)} /> Autosave</label>
-          <label class="quick-setting"><input type="checkbox" checked={editorPreferences.auto_reload} disabled={!editorPreferencesLoaded || editorPreferenceSaving.auto_reload} onchange={(event) => setEditorPreference('auto_reload', event.currentTarget)} /> Auto-reload unchanged notes</label>
+        <PopupMenu class="settings-content">
+          <button class="popup-menu-item" aria-label="Open Settings" onclick={openSettingsTab}><span>Settings...</span></button>
+          <div class="popup-menu-divider"></div>
+          <label class="popup-menu-item quick-setting"><input type="checkbox" checked={editorPreferences.autosave} disabled={!editorPreferencesLoaded || editorPreferenceSaving.autosave} onchange={(event) => setEditorPreference('autosave', event.currentTarget)} /><span>Autosave</span>{#if editorPreferences.autosave}<span class="popup-menu-mark" aria-hidden="true"><Icon name="check" size={14} /></span>{/if}</label>
+          <label class="popup-menu-item quick-setting"><input type="checkbox" checked={editorPreferences.auto_reload} disabled={!editorPreferencesLoaded || editorPreferenceSaving.auto_reload} onchange={(event) => setEditorPreference('auto_reload', event.currentTarget)} /><span>Auto-reload unchanged notes</span>{#if editorPreferences.auto_reload}<span class="popup-menu-mark" aria-hidden="true"><Icon name="check" size={14} /></span>{/if}</label>
           {#if settingsMessage}<p role="alert">{settingsMessage}</p>{/if}
-        </div>
+        </PopupMenu>
       </details>
     </nav>
 
@@ -1073,13 +1077,13 @@
         <footer class="sidebar-footer">
           <details bind:this={workspacePicker} class="workspace-picker">
             <summary title={selectedWorkspace ?? 'Select workspace'}><span>{workspaceName || 'Select workspace'}</span><Icon name="chevron-down" size={16} /></summary>
-            <div class="workspace-picker-menu">
+            <PopupMenu class="workspace-picker-menu">
               <strong>Workspaces</strong>
               {#if workspacesLoaded && workspaces.length === 0}<p class="empty-workspaces">No saved workspaces.</p>{/if}
               {#each workspaces as workspace}
-                <button class:selected={selectedWorkspace === workspace} aria-label={workspace} aria-current={selectedWorkspace === workspace ? 'page' : undefined} onclick={() => selectWorkspace(workspace)} disabled={loadingWorkspace || moving || appearanceSaving} title={workspace}><span class="workspace-option-name">{workspaceLabel(workspace)}</span><span class="workspace-option-path">{workspace}</span></button>
+                <button class="popup-menu-item workspace-option" class:selected={selectedWorkspace === workspace} aria-label={workspace} aria-current={selectedWorkspace === workspace ? 'page' : undefined} onclick={() => selectWorkspace(workspace)} disabled={loadingWorkspace || moving || appearanceSaving} title={workspace}><span class="workspace-option-details"><span class="workspace-option-name">{workspaceLabel(workspace)}</span><span class="workspace-option-path">{workspace}</span></span>{#if selectedWorkspace === workspace}<span class="popup-menu-mark" aria-hidden="true"><Icon name="check" size={14} /></span>{/if}</button>
               {/each}
-            </div>
+            </PopupMenu>
           </details>
         </footer>
       </aside>
@@ -1128,11 +1132,6 @@
               </div>
             {/if}
           </div>
-          {#if selectedNote}
-            <div class="document-tabs-actions">
-              <button class="icon-button outline-toggle-btn" onclick={toggleOutlinePanel} aria-label="Toggle contents panel" aria-pressed={outlineOpen} title="Toggle contents panel"><Icon name={outlineOpen ? 'panel-right' : 'panel-right-closed'} /></button>
-            </div>
-          {/if}
         </div>
         <div class="document-host-body" inert={Boolean(bulkClose)}>
           {#each noteTabs as tab (tab.key)}

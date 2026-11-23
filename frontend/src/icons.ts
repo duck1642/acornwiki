@@ -1,5 +1,9 @@
 // Static SVG paths from Lucide, Tabler and the custom new-note icon.
 export const icons = {
+  "check": "<path d=\"M20 6 9 17l-5-5\" />",
+  "source-code": "<path d=\"M7 8l-4 4l4 4\" /><path d=\"M17 8l4 4l-4 4\" /><path d=\"M14 4l-4 16\" />",
+  "book-open": "<path d=\"M12 5v16\" /><path d=\"M20.001 19A2 2 0 0022 17V5a2 2 0 00-1.999-2L16 3.002A5 5 0 0012 5a5 5 0 00-4-2H4a2 2 0 00-2 2v12a2 2 0 001.999 2H8a5 5 0 014 2 5 5 0 014-2z\" />",
+  "save": "<path d=\"M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z\" /><path d=\"M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7\" /><path d=\"M7 3v4a1 1 0 0 0 1 1h7\" />",
   "panel-left-closed": "<rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"2.5\" /><path d=\"M8 6.5v11\" />",
   "panel-left": "<rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"2.5\" /><rect x=\"6\" y=\"6.5\" width=\"3\" height=\"11\" rx=\"1\" fill=\"currentColor\" stroke=\"none\" />",
   "arrow-left": "<path d=\"m12 19-7-7 7-7\" />\n  <path d=\"M19 12H5\" />",

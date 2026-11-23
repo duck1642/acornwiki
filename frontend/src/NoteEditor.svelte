@@ -9,6 +9,7 @@
   import { Lexer, marked } from 'marked'
   import DOMPurify from 'dompurify'
   import Icon from './Icon.svelte'
+  import PopupMenu from './PopupMenu.svelte'
   import { openWorkspaceFile } from './fileActions'
 
   type EditorPreferences = { autosave: boolean; auto_reload: boolean; reload_notice: boolean }
@@ -484,15 +485,15 @@
       {#if breadcrumb.prefix}<span class="note-breadcrumb-dir">{breadcrumb.prefix}</span>{/if}{#if breadcrumb.file}<span class="note-breadcrumb-file">{breadcrumb.file}</span>{/if}
     </div>
     {#if path}
-      <button onclick={() => mode = 'source'} aria-pressed={mode === 'source'}>Source</button>
-      <button onclick={() => mode = 'read'} aria-pressed={mode === 'read'}>Read</button>
-      <button onclick={() => save()} disabled={!dirty || saving || conflict || freezeEditors || prompt}>Save</button>
+      <button onclick={() => mode = 'source'} aria-pressed={mode === 'source'} aria-label="Source" title="Source"><Icon name="source-code" /></button>
+      <button onclick={() => mode = 'read'} aria-pressed={mode === 'read'} aria-label="Read" title="Read"><Icon name="book-open" /></button>
+      <button onclick={() => save()} disabled={!dirty || saving || conflict || freezeEditors || prompt} aria-label="Save" title="Save"><Icon name="save" /></button>
       <details class="note-more-menu">
         <summary aria-label="More note actions" title="More note actions"><Icon name="ellipsis" /></summary>
-        <div class="note-more-content">
-          <button disabled title="Not available yet">Rename</button>
-          <button disabled title="Not available yet">Copy</button>
-        </div>
+        <PopupMenu class="note-more-content">
+          <button class="popup-menu-item" disabled title="Not available yet">Rename</button>
+          <button class="popup-menu-item" disabled title="Not available yet">Copy</button>
+        </PopupMenu>
       </details>
     {/if}
   </div>
