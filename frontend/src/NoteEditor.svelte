@@ -65,6 +65,7 @@
   let diskText = $state('')
   let saving = $state(false)
   let opening = false
+  let outlineReady = $state(false)
   let disposed = false
   let loadingPromise: Promise<void> = Promise.resolve()
   let prompt = $state(false)
@@ -101,7 +102,7 @@
   $effect(() => {
     const key = tabKey
     const headings = outline
-    untrack(() => onOutlineChange?.(key, headings))
+    if (outlineReady) untrack(() => onOutlineChange?.(key, headings))
   })
 
   $effect(() => {
@@ -348,7 +349,7 @@
       message = ''
       scheduleExternalCheck()
     } catch (reason) { if (token === operation) { error = 'Could not open or watch the note.'; console.error(reason); scheduleSave() } }
-    finally { opening = false }
+    finally { opening = false; if (!disposed && token === operation) outlineReady = true }
   }
 
   export async function save(expected = version): Promise<boolean> {

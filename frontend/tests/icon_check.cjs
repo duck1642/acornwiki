@@ -82,7 +82,7 @@ const net = require('node:net');
         state,
         api: {
           get_settings: async () => ({
-            workspaces: ['test'], blocked_extensions: [],
+            workspaces: ['test', 'C:\\alpha\\workspace', 'C:\\beta\\workspace', 'C:\\reading-room'], blocked_extensions: [],
             editor: { autosave: false, auto_reload: true, reload_notice: true },
           }),
           set_editor_preference: async () => {},
@@ -131,7 +131,11 @@ const net = require('node:net');
 
     await page.goto(baseUrl);
     await page.locator('.workspace-picker > summary').click();
+    assert.equal(await page.locator('.workspace-option-name').filter({hasText: /^workspace$/}).count(), 2);
+    assert.equal(await page.locator('.workspace-option-name').filter({hasText: /^reading-room$/}).count(), 1);
     await page.getByRole('button', { name: 'test', exact: true }).click();
+    assert.equal(await page.locator('.workspace-picker > summary span').innerText(), 'test');
+    assert.equal((await page.locator('.workspace-picker > summary svg').boundingBox()).width, 16);
     await page.getByRole('button', { name: 'note.md', exact: true }).waitFor();
     await page.locator('.tree-folder').waitFor();
     for (const [name, expected] of [['image.jxl','image'], ['data.jsonl','config'], ['archive.7z','archive'], ['book.djvu','book'], ['song.flac','audio'], ['clip.mkv','video'], ['note.md','markdown']]) {

@@ -130,7 +130,8 @@
   let tabsLocked = $state(false)
   let closeRequestActive = false
   let selectedNote = $derived(noteTabs.find((tab) => tab.key === activeTabKey)?.path ?? null)
-  let workspaceName = $derived(selectedWorkspace ? (selectedWorkspace.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? selectedWorkspace) : '')
+  function workspaceLabel(path: string): string { return path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || path }
+  let workspaceName = $derived(selectedWorkspace ? workspaceLabel(selectedWorkspace) : '')
   let navHistory = $state<string[]>([])
   let navIndex = $state(-1)
   let canGoBack = $derived(navIndex > 0)
@@ -162,6 +163,10 @@
   let watcherError = $state<string | null>(null)
   let visibleTree = $derived(buildVisibleTree())
   let rootDirectory = $derived(directories[''])
+  let workspaceLoadingPending = $derived(loadingWorkspace || Boolean(rootDirectory?.loading && rootDirectory.items === null))
+  let outlineLoadingPending = $derived(Boolean(selectedNote && activeTabKey && !(activeTabKey in tabOutlines)))
+  let showWorkspaceLoading = $state(false)
+  let showOutlineLoading = $state(false)
   const rowHeight = 28
   const overscan = 8
   let scrollTop = $state(0)
@@ -170,6 +175,19 @@
   const refreshIndicatorDelay = 400
   let delayedRefreshes = $state<string[]>([])
   const refreshTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  $effect(() => {
+    if (!workspaceLoadingPending) { showWorkspaceLoading = false; return }
+    const timer = setTimeout(() => { showWorkspaceLoading = true }, refreshIndicatorDelay)
+    return () => clearTimeout(timer)
+  })
+  $effect(() => {
+    // Restart the delay when switching to a different note.
+    const key = activeTabKey
+    if (!outlineLoadingPending || !key) { showOutlineLoading = false; return }
+    showOutlineLoading = false
+    const timer = setTimeout(() => { showOutlineLoading = true }, refreshIndicatorDelay)
+    return () => clearTimeout(timer)
+  })
   let startRow = $derived(Math.max(0, Math.min(visibleTree.length, Math.floor(scrollTop / rowHeight) - overscan)))
   let endRow = $derived(Math.min(visibleTree.length, Math.ceil((scrollTop + viewportHeight) / rowHeight) + overscan))
   let renderedRows = $derived(visibleTree.slice(startRow, endRow))
@@ -998,7 +1016,7 @@
           {:else}
           {#if watcherError}<p class="tree-alert" role="alert">File watcher: {watcherError}. Refresh manually.</p>{/if}
           {#if rootDirectory?.error}<p class="tree-alert" role="alert">{rootDirectory.error} <button class="text-button" onclick={() => refreshTree('')}>Retry</button></p>{/if}
-          {#if rootDirectory?.loading && (!rootDirectory.items || delayedRefreshes.includes(''))}<p class="tree-status-message" aria-live="polite">{rootDirectory.items ? 'Refreshing...' : 'Loading workspace...'}</p>{/if}
+          {#if rootDirectory?.loading && (rootDirectory.items ? delayedRefreshes.includes('') : showWorkspaceLoading)}<p class="tree-status-message" aria-live="polite">{rootDirectory.items ? 'Refreshing...' : 'Loading workspace...'}</p>{/if}
           {#if rootDirectory?.items?.length === 0 && !rootDirectory.loading}<p class="tree-status-message">This workspace is empty.</p>{/if}
           <div class="tree-viewport" bind:this={viewport} bind:clientHeight={viewportHeight} tabindex="-1" aria-label="Scrollable file tree" onscroll={handleTreeScroll}>
             <ul class="tree-list">
@@ -1006,10 +1024,10 @@
               {#each renderedRows as row, index (row.kind === 'item' ? `item:${row.path}` : `status:${row.path}`)}
                 <li class="tree-entry" data-row-index={startRow + index}>
                   {#each Array(row.depth) as _, level}
-                    <span class="tree-indent-guide" aria-hidden="true" style={`left: ${21 + level * 20}px`}></span>
+                    <span class="tree-indent-guide" aria-hidden="true" style={`left: ${11 + level * 20}px`}></span>
                   {/each}
                   {#if row.kind === 'item'}
-                    <div class="tree-row" style={`padding-left: ${8 + row.depth * 20}px`}>
+                    <div class="tree-row" style={`padding-left: ${row.depth * 20}px`}>
                       {#if row.item.is_directory}
                         <button class="tree-folder" onclick={() => toggleFolder(row.path)} onkeydown={handleTreeKeydown} aria-expanded={expandedFolders.includes(row.path)}>
                           <span class="tree-disclosure" class:collapsed={!expandedFolders.includes(row.path)}><Icon name={expandedFolders.includes(row.path) ? 'chevron-down' : 'chevron-right'} /></span>
@@ -1037,7 +1055,7 @@
                       {/if}
                     </div>
                   {:else}
-                    <div class="tree-status" style={`padding-left: ${8 + row.depth * 20}px`}>
+                    <div class="tree-status" style={`padding-left: ${row.depth * 20}px`}>
                       <span title={row.message}>{row.message}</span> {#if row.error}<button class="text-button" onclick={() => refreshTree(row.path)} onkeydown={handleTreeKeydown}>Retry</button>{/if}
                     </div>
                   {/if}
@@ -1047,17 +1065,19 @@
             </ul>
           </div>
           {/if}
+        {:else if loadingWorkspace}
+          {#if showWorkspaceLoading}<p class="tree-status-message" role="status">Loading workspace...</p>{/if}
         {:else}
           <p class="tree-status-message">Choose a workspace below to see its files.</p>
         {/if}
         <footer class="sidebar-footer">
           <details bind:this={workspacePicker} class="workspace-picker">
-            <summary title={selectedWorkspace ?? 'Select workspace'}><span>{selectedWorkspace ?? 'Select workspace'}</span><Icon name="chevron-down" size={14} /></summary>
+            <summary title={selectedWorkspace ?? 'Select workspace'}><span>{workspaceName || 'Select workspace'}</span><Icon name="chevron-down" size={16} /></summary>
             <div class="workspace-picker-menu">
               <strong>Workspaces</strong>
               {#if workspacesLoaded && workspaces.length === 0}<p class="empty-workspaces">No saved workspaces.</p>{/if}
               {#each workspaces as workspace}
-                <button class:selected={selectedWorkspace === workspace} aria-current={selectedWorkspace === workspace ? 'page' : undefined} onclick={() => selectWorkspace(workspace)} disabled={loadingWorkspace || moving || appearanceSaving} title={workspace}>{workspace}</button>
+                <button class:selected={selectedWorkspace === workspace} aria-label={workspace} aria-current={selectedWorkspace === workspace ? 'page' : undefined} onclick={() => selectWorkspace(workspace)} disabled={loadingWorkspace || moving || appearanceSaving} title={workspace}><span class="workspace-option-name">{workspaceLabel(workspace)}</span><span class="workspace-option-path">{workspace}</span></button>
               {/each}
             </div>
           </details>
@@ -1191,7 +1211,7 @@
         <section class="empty-state"><h2>No note selected</h2><p>Choose a Markdown file from the workspace tree.</p>{#if workspaceMessage}<p class="workspace-message" role="alert">{workspaceMessage}</p>{/if}</section>
       {:else if selectedWorkspace}
         <section class="empty-state"><h2>No note selected</h2><p>Choose a workspace to see its files.</p>{#if workspaceMessage}<p class="workspace-message" role="alert">{workspaceMessage}</p>{/if}</section>
-      {:else}
+      {:else if !loadingWorkspace}
         <section class="empty-state" aria-live="polite">
           {#if workspaceMessage}<p class="workspace-message" role="alert">{workspaceMessage}</p>{/if}
           <h2>Select a workspace</h2><p>Choose a workspace from the file panel.</p>
@@ -1206,7 +1226,9 @@
           <button class="outline-collapse-all" aria-label={filterIsActive || allOutlineExpanded ? 'Collapse all headings' : 'Expand all headings'} title={filterIsActive ? 'Clear the filter to change heading expansion' : allOutlineExpanded ? 'Collapse all headings' : 'Expand all headings'} aria-expanded={filterIsActive || allOutlineExpanded} disabled={expandableOutlineIds.length === 0 || filterIsActive} onclick={toggleAllOutline}><Icon name={filterIsActive || allOutlineExpanded ? 'collapse' : 'expand'} size={16} /></button>
         </div>
         <input class="outline-filter" type="search" aria-label="Filter headings" placeholder="Filter headings..." bind:value={outlineFilter} />
-        {#if activeOutline.length === 0}
+        {#if outlineLoadingPending}
+          {#if showOutlineLoading}<p class="outline-empty" role="status">Loading headings...</p>{/if}
+        {:else if activeOutline.length === 0}
           <p class="outline-empty">No headings in this note.</p>
         {:else if filteredOutline.length === 0}
           <p class="outline-empty">No headings match this filter.</p>
@@ -1251,7 +1273,10 @@
   {#each nodes as heading (heading.id)}
     {@const hasChildren = heading.children.length > 0}
     {@const expanded = filterIsActive || expandedOutlineIds.includes(heading.id)}
-    <li class="outline-row" style={`padding-left: ${depth * 14}px`}>
+    <li class="outline-row" style={`padding-left: ${2 + depth * 20}px`}>
+      {#each Array(depth) as _, level}
+        <span class="outline-indent-guide" aria-hidden="true" style={`left: ${10 + level * 20}px`}></span>
+      {/each}
       {#if hasChildren}
         <button class="outline-caret" aria-label={expanded ? `Collapse ${heading.label}` : `Expand ${heading.label}`} aria-expanded={expanded} disabled={filterIsActive} onclick={() => toggleOutlineNode(heading.id)}><Icon name={expanded ? 'chevron-down' : 'chevron-right'} /></button>
       {:else}
