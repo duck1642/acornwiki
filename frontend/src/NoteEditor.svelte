@@ -487,7 +487,7 @@
       <button onclick={() => mode = 'read'} aria-pressed={mode === 'read'}>Read</button>
       <button onclick={() => save()} disabled={!dirty || saving || conflict || freezeEditors || prompt}>Save</button>
       <details class="note-more-menu">
-        <summary aria-label="More note actions" title="More note actions">⋯</summary>
+        <summary aria-label="More note actions" title="More note actions"><Icon name="ellipsis" /></summary>
         <div class="note-more-content">
           <button disabled title="Not available yet">Rename</button>
           <button disabled title="Not available yet">Copy</button>

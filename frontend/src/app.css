@@ -411,14 +411,25 @@ a:focus-visible {
 
 .tree-folder:hover,
 .tree-file:hover { background: var(--bg-hover); color: var(--ink); }
-.tree-folder { gap: 5px; }
-.tree-file { padding-left: 22px; }
+.tree-folder { gap: 7px; }
+.tree-file { padding-left: 5px; }
 .tree-note { color: var(--ink); }
 .tree-note.selected { color: var(--accent); font-weight: 650; }
-.tree-disclosure { width: 11px; flex: 0 0 11px; color: var(--ink-faint); font-size: 12px; text-align: center; }
-.tree-icon { flex: 0 0 15px; color: var(--ink-faint); }
-.folder-icon { color: var(--warn); }
-.note-icon { color: var(--accent); }
+.tree-disclosure { width: 16px; height: 16px; flex: 0 0 16px; color: var(--ink-faint); display: inline-flex; align-items: center; justify-content: center; }
+.tree-icon { flex: 0 0 16px; color: var(--ink-muted); }
+.file-icon-markdown, .file-icon-file, .file-icon-file-text { color: var(--ink-muted); }
+.file-icon-pdf { color: var(--file-icon-pdf, var(--ink-muted)); }
+.file-icon-spreadsheet { color: var(--file-icon-spreadsheet, var(--ink-muted)); }
+.file-icon-presentation { color: var(--file-icon-presentation, var(--ink-muted)); }
+.file-icon-book { color: var(--file-icon-book, var(--ink-muted)); }
+.file-icon-image { color: var(--file-icon-image, var(--ink-muted)); }
+.file-icon-video { color: var(--file-icon-video, var(--ink-muted)); }
+.file-icon-audio { color: var(--file-icon-audio, var(--ink-muted)); }
+.file-icon-archive { color: var(--file-icon-archive, var(--ink-muted)); }
+.file-icon-config { color: var(--file-icon-config, var(--ink-muted)); }
+.file-icon-code-file { color: var(--file-icon-code-file, var(--ink-muted)); }
+.file-icon-document { color: var(--file-icon-document, var(--ink-muted)); }
+.file-icon-code { color: var(--file-icon-code, var(--ink-muted)); }
 .tree-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .move-button { width: 26px; height: 26px; opacity: 0.4; }
 .tree-row:hover .move-button,

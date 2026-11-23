@@ -21,7 +21,6 @@
   type ThemeId = 'warm-charcoal' | 'warm-paper'
   type SurfaceMode = 'framed' | 'seamless'
   type PageWidthPreset = '74ch' | '96ch' | '100%'
-  type FileIconId = 'file' | 'markdown' | 'image' | 'pdf' | 'code'
   type WorkspaceAppearance = {
     theme: string
     surface_mode: string
@@ -70,6 +69,8 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
   import Icon from './Icon.svelte'
+  import { fileIconFor as classifyFileIcon, isFileIconId } from './fileIcons'
+  import { setFileIconColors } from './fileIconColors'
   import NoteEditor from './NoteEditor.svelte'
   import { openWorkspaceFile } from './fileActions'
   import { planMoveLinks } from './markdownLinkPlan'
@@ -87,8 +88,6 @@
   ]
   const defaultEditorPreferences: EditorPreferences = { autosave: false, auto_reload: true, reload_notice: true }
   const settingsTabKey = '__acornwiki_settings__'
-  const imageExtensions = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg', '.avif']
-  const codeExtensions = ['.json', '.yaml', '.yml', '.toml', '.py', '.ts', '.tsx', '.js', '.jsx', '.css', '.html', '.sh', '.sql']
 
   let ready = $state(false)
   let message = $state('Waiting for backend...')
@@ -178,6 +177,7 @@
     document.documentElement.dataset.theme = appearance.theme
     document.documentElement.dataset.surface = effectiveSurface
     document.documentElement.style.setProperty('--page-width', effectivePageWidth)
+    setFileIconColors(document.documentElement)
   })
 
   $effect(() => {
@@ -714,22 +714,8 @@
       file_icons: value.file_icons,
     }
   }
-  function isFileIconId(value: string): value is FileIconId {
-    return value === 'file' || value === 'markdown' || value === 'image' || value === 'pdf' || value === 'code'
-  }
-  function minimalFileIcon(extension: string): FileIconId {
-    if (extension === '.md' || extension === '.markdown') return 'markdown'
-    if (imageExtensions.includes(extension)) return 'image'
-    if (extension === '.pdf') return 'pdf'
-    if (codeExtensions.includes(extension)) return 'code'
-    return 'file'
-  }
-  function fileIconFor(name: string): FileIconId {
-    const dot = name.lastIndexOf('.')
-    const extension = dot >= 0 ? name.slice(dot).toLowerCase() : ''
-    const override = Object.entries(appearance.file_icons.extensions)
-      .find(([key]) => key.toLowerCase() === extension)?.[1]
-    return override && isFileIconId(override) ? override : minimalFileIcon(extension)
+  function fileIconFor(name: string) {
+    return classifyFileIcon(name, appearance.file_icons.extensions)
   }
   async function setAppearance(patch: AppearancePatch) {
     const api = window.pywebview?.api
@@ -944,7 +930,7 @@
 <main class="app-shell">
   <header class="menu-bar" aria-label="Application menu">
     <div class="menu-items" aria-label="Menus">
-      <button class="menu-sidebar-toggle" onclick={toggleFilePanel} aria-label="Toggle files panel" aria-pressed={filePanelOpen} title="Toggle files panel"><Icon name="folder" /></button>
+      <button class="menu-sidebar-toggle" onclick={toggleFilePanel} aria-label="Toggle files panel" aria-pressed={filePanelOpen} title="Toggle files panel"><Icon name="panel-left" /></button>
       <button class="menu-item" disabled title="This menu is not available yet">File</button>
       <button class="menu-item" disabled title="This menu is not available yet">Edit</button>
       <details class="view-menu" bind:open={viewMenuOpen}>
@@ -967,7 +953,7 @@
 
   <div class="workspace-layout" class:files-hidden={!filePanelOpen} class:outline-open={showRightPanel}>
     <nav class="activity-bar" aria-label="Application tools">
-      <button class="activity-button" class:active={filePanelOpen} onclick={toggleFilePanel} aria-label="Files" aria-pressed={filePanelOpen} title="Files"><Icon name="folder" /></button>
+      <button class="activity-button" class:active={filePanelOpen} onclick={() => filePanelOpen = true} aria-label="Files" aria-pressed={filePanelOpen} title="Files"><Icon name="folder" /></button>
       <button class="activity-button" disabled aria-label="Graph view" title="Graph view is not available yet"><Icon name="network" /></button>
       <button class="activity-button" disabled aria-label="Command palette" title="Command palette is not available yet"><Icon name="terminal" /></button>
       <div class="activity-spacer"></div>
@@ -1006,7 +992,7 @@
                   onclick={(event) => openSearchResult(result.path, result.is_directory, event.ctrlKey || event.metaKey)}
                   onmousedown={(event) => { if (event.button === 1 && !result.is_directory && result.path.toLowerCase().endsWith('.md')) event.preventDefault() }}
                   onauxclick={(event) => { if (event.button === 1 && !result.is_directory && result.path.toLowerCase().endsWith('.md')) { event.preventDefault(); void openNote(result.path, undefined, { newTab: true }) } }}
-                ><Icon name={result.is_directory ? 'folder' : fileIconFor(result.path)} /><span>{result.path}</span></button>
+                ><Icon name={result.is_directory ? 'chevron-right' : fileIconFor(result.path)} class={result.is_directory ? '' : `file-icon-${fileIconFor(result.path)}`} /><span>{result.path}</span></button>
               {/each}
             </div>
           {:else}
@@ -1023,8 +1009,7 @@
                     <div class="tree-row" style={`padding-left: ${8 + row.depth * 20}px`}>
                       {#if row.item.is_directory}
                         <button class="tree-folder" onclick={() => toggleFolder(row.path)} onkeydown={handleTreeKeydown} aria-expanded={expandedFolders.includes(row.path)}>
-                          <span class="tree-disclosure" aria-hidden="true">{expandedFolders.includes(row.path) ? '▾' : '▸'}</span>
-                          <Icon name="folder" class="tree-icon folder-icon" />
+                          <span class="tree-disclosure"><Icon name={expandedFolders.includes(row.path) ? 'chevron-down' : 'chevron-right'} /></span>
                           <span class="tree-label" title={row.item.name}>{row.item.name}</span>
                         </button>
                       {:else if row.path.toLowerCase().endsWith('.md')}
@@ -1038,12 +1023,12 @@
                           onauxclick={(event) => { if (event.button === 1) { event.preventDefault(); void openNote(row.path, undefined, { newTab: true }) } }}
                           onkeydown={handleTreeKeydown}
                         >
-                          <Icon name={fileIconFor(row.item.name)} class="tree-icon note-icon" />
+                          <Icon name={fileIconFor(row.item.name)} class={`tree-icon file-icon-${fileIconFor(row.item.name)}`} />
                           <span class="tree-label">{row.item.name}</span>
                         </button>
                       {:else}
                         <button class="tree-file" title={row.item.name} onclick={() => openTreeFile(row.path)} onkeydown={handleTreeKeydown}>
-                          <Icon name={fileIconFor(row.item.name)} class="tree-icon" />
+                          <Icon name={fileIconFor(row.item.name)} class={`tree-icon file-icon-${fileIconFor(row.item.name)}`} />
                           <span class="tree-label">{row.item.name}</span>
                         </button>
                       {/if}
@@ -1065,7 +1050,7 @@
         {/if}
         <footer class="sidebar-footer">
           <details bind:this={workspacePicker} class="workspace-picker">
-            <summary title={selectedWorkspace ?? 'Select workspace'}><span>{selectedWorkspace ?? 'Select workspace'}</span><span aria-hidden="true">⌄</span></summary>
+            <summary title={selectedWorkspace ?? 'Select workspace'}><span>{selectedWorkspace ?? 'Select workspace'}</span><Icon name="chevron-down" size={14} /></summary>
             <div class="workspace-picker-menu">
               <strong>Workspaces</strong>
               {#if workspacesLoaded && workspaces.length === 0}<p class="empty-workspaces">No saved workspaces.</p>{/if}
@@ -1103,7 +1088,7 @@
                     <span class="tab-dirty-indicator" title="Unsaved changes" aria-label="Unsaved changes">●</span>
                   {/if}
                 </button>
-                <button class="document-tab-close" aria-label={`Close ${tabName}`} title={`Close ${tab.path}`} disabled={tabsLocked} onclick={() => closeNoteTab(tab.key)}><span aria-hidden="true">×</span></button>
+                <button class="document-tab-close" aria-label={`Close ${tabName}`} title={`Close ${tab.path}`} disabled={tabsLocked} onclick={() => closeNoteTab(tab.key)}><Icon name="x" size={14} /></button>
               </div>
             {/each}
             {#if settingsTabOpen}
@@ -1117,7 +1102,7 @@
                   onmousedown={(event) => { if (event.button === 1) event.preventDefault() }}
                   onauxclick={(event) => { if (event.button === 1 && !tabsLocked) { event.preventDefault(); closeSettingsTab() } }}
                 >Settings</button>
-                <button class="document-tab-close" aria-label="Close Settings" title="Close Settings" disabled={tabsLocked} onclick={closeSettingsTab}><span aria-hidden="true">×</span></button>
+                <button class="document-tab-close" aria-label="Close Settings" title="Close Settings" disabled={tabsLocked} onclick={closeSettingsTab}><Icon name="x" size={14} /></button>
               </div>
             {/if}
           </div>
@@ -1216,7 +1201,7 @@
       <aside class="note-outline" aria-label="Contents">
         <div class="outline-heading">
           <h2 class="outline-title">Contents</h2>
-          <button class="outline-collapse-all" aria-label={filterIsActive || allOutlineExpanded ? 'Collapse all headings' : 'Expand all headings'} title={filterIsActive ? 'Clear the filter to change heading expansion' : allOutlineExpanded ? 'Collapse all headings' : 'Expand all headings'} aria-expanded={filterIsActive || allOutlineExpanded} disabled={expandableOutlineIds.length === 0 || filterIsActive} onclick={toggleAllOutline}>{filterIsActive || allOutlineExpanded ? '−' : '+'}</button>
+          <button class="outline-collapse-all" aria-label={filterIsActive || allOutlineExpanded ? 'Collapse all headings' : 'Expand all headings'} title={filterIsActive ? 'Clear the filter to change heading expansion' : allOutlineExpanded ? 'Collapse all headings' : 'Expand all headings'} aria-expanded={filterIsActive || allOutlineExpanded} disabled={expandableOutlineIds.length === 0 || filterIsActive} onclick={toggleAllOutline}><Icon name={filterIsActive || allOutlineExpanded ? 'collapse' : 'expand'} size={16} /></button>
         </div>
         <input class="outline-filter" type="search" aria-label="Filter headings" placeholder="Filter headings..." bind:value={outlineFilter} />
         {#if activeOutline.length === 0}
@@ -1266,7 +1251,7 @@
     {@const expanded = filterIsActive || expandedOutlineIds.includes(heading.id)}
     <li class="outline-row" style={`padding-left: ${depth * 14}px`}>
       {#if hasChildren}
-        <button class="outline-caret" aria-label={expanded ? `Collapse ${heading.label}` : `Expand ${heading.label}`} aria-expanded={expanded} disabled={filterIsActive} onclick={() => toggleOutlineNode(heading.id)}>{expanded ? '▾' : '▸'}</button>
+        <button class="outline-caret" aria-label={expanded ? `Collapse ${heading.label}` : `Expand ${heading.label}`} aria-expanded={expanded} disabled={filterIsActive} onclick={() => toggleOutlineNode(heading.id)}><Icon name={expanded ? 'chevron-down' : 'chevron-right'} size={14} /></button>
       {:else}
         <span class="outline-caret-spacer" aria-hidden="true"></span>
       {/if}
