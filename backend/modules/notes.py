@@ -20,6 +20,11 @@ class NoteBatch(TypedDict):
     next_index: int
 
 
+class NoteVersion(TypedDict):
+    path: str
+    version: str
+
+
 def list_markdown_notes(root: Path) -> list[str]:
     """List workspace Markdown files without following links or hiding scan errors."""
     def raise_scan_error(error: OSError) -> None:
@@ -69,6 +74,64 @@ def read_note_batch(
 
 class NoteConflictError(Exception):
     """Signal that the file no longer matches the version being edited."""
+
+
+def validate_note_rewrites(root: Path, rewrites: list[NoteSnapshot]) -> None:
+    """Check planned note versions before starting a multi-file operation."""
+    if not isinstance(rewrites, list):
+        raise TypeError("Note rewrites must be a list")
+    seen: set[str] = set()
+    for rewrite in rewrites:
+        if not isinstance(rewrite, dict) or not all(
+            isinstance(rewrite.get(key), str) for key in ("path", "content", "version")
+        ):
+            raise ValueError("Invalid note rewrite")
+        # Reject content that cannot be written before starting the move.
+        rewrite["content"].encode("utf-8")
+        path = note_path(root, rewrite["path"])
+        key = os.path.normcase(str(path))
+        if key in seen:
+            raise ValueError("A note cannot appear twice in the plan")
+        seen.add(key)
+        try:
+            current = path.read_bytes()
+        except FileNotFoundError as error:
+            raise NoteConflictError(
+                f"Note was deleted or moved: {rewrite['path']}"
+            ) from error
+        if hashlib.sha256(current).hexdigest() != rewrite["version"]:
+            raise NoteConflictError(f"Note changed on disk: {rewrite['path']}")
+
+
+def validate_note_scan(root: Path, snapshots: list[NoteVersion]) -> None:
+    """Reject a plan if any scanned note changed or the set of notes differs."""
+    if not isinstance(snapshots, list):
+        raise TypeError("Note versions must be a list")
+    seen: set[str] = set()
+    for snapshot in snapshots:
+        if not isinstance(snapshot, dict) or not all(
+            isinstance(snapshot.get(key), str) for key in ("path", "version")
+        ):
+            raise ValueError("Invalid note version")
+        path = note_path(root, snapshot["path"])
+        key = os.path.normcase(str(path))
+        if key in seen:
+            raise ValueError("A note cannot appear twice in the scan")
+        seen.add(key)
+        try:
+            current = path.read_bytes()
+        except FileNotFoundError as error:
+            raise NoteConflictError(
+                f"Note was deleted or moved: {snapshot['path']}"
+            ) from error
+        if hashlib.sha256(current).hexdigest() != snapshot["version"]:
+            raise NoteConflictError(f"Note changed on disk: {snapshot['path']}")
+    current_paths = {
+        os.path.normcase(str(note_path(root, path)))
+        for path in list_markdown_notes(root)
+    }
+    if seen != current_paths:
+        raise NoteConflictError("The workspace note list changed")
 
 
 def markdown_name(name: str) -> str:

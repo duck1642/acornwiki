@@ -12,10 +12,48 @@ from backend.modules.link_paths import (
     path_after_move,
     resolve_moved_targets,
 )
-from backend.modules.notes import list_markdown_notes, read_note_batch
+from backend.modules.notes import (
+    NoteConflictError,
+    list_markdown_notes,
+    read_note,
+    read_note_batch,
+    validate_note_rewrites,
+    validate_note_scan,
+)
 
 
 class LinkPathTests(unittest.TestCase):
+    def test_plan_validation_detects_changed_unmodified_and_added_notes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            (root / "a.md").write_text("a", encoding="utf-8")
+            (root / "b.md").write_text("b", encoding="utf-8")
+            first = read_note(root, "a.md")
+            second = read_note(root, "b.md")
+            snapshots = [
+                {"path": n["path"], "version": n["version"]} for n in (first, second)
+            ]
+            validate_note_scan(root, snapshots)
+            validate_note_rewrites(root, [first])
+            (root / "b.md").write_text("changed", encoding="utf-8")
+            with self.assertRaises(NoteConflictError):
+                validate_note_scan(root, snapshots)
+            (root / "b.md").write_text("b", encoding="utf-8")
+            (root / "new.md").write_text("new", encoding="utf-8")
+            with self.assertRaises(NoteConflictError):
+                validate_note_scan(root, snapshots)
+            with self.assertRaises(ValueError):
+                validate_note_rewrites(root, [first, first])
+
+    def test_invalid_entities_and_utf8_in_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            target = parse_markdown_target(root, "note.md", "a&copycat;z.md")
+            assert target is not None
+            self.assertEqual(target.path, "a&copycat;z.md")
+            with self.assertRaises(ValueError):
+                parse_markdown_target(root, "note.md", "%FF.md")
+
     def test_note_batches_preserve_versions_and_boundaries(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
@@ -67,6 +105,33 @@ class LinkPathTests(unittest.TestCase):
                     root, "docs/note.md", "docs", "archive/docs", ["../../outside.md"]
                 )
 
+    def test_queries_block_only_links_whose_paths_need_rewriting(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            self.assertEqual(
+                resolve_moved_targets(
+                    root,
+                    "docs/note.md",
+                    "docs",
+                    "archive/docs",
+                    ["image.png?version=2", "?self=1", "https://example.com?test=1"],
+                ),
+                [None, None, None],
+            )
+            for target in ("file.md?", "file.md?version=2#heading", "file.md&#63;q=1"):
+                with self.subTest(target=target), self.assertRaisesRegex(
+                    ValueError, "link with a query"
+                ):
+                    resolve_moved_targets(
+                        root, "note.md", "file.md", "archive/file.md", [target]
+                    )
+            self.assertEqual(
+                resolve_moved_targets(
+                    root, "note.md", "file.md", "archive/file.md", ["file.md#h?q"]
+                ),
+                ["archive/file.md#h?q"],
+            )
+
     def test_markdown_targets_preserve_unicode_and_style(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
@@ -102,7 +167,6 @@ class LinkPathTests(unittest.TestCase):
             for raw in (
                 "https://example.com/a",
                 "#heading",
-                "file.md?query=1",
                 "&#104;ttp://example.com",
             ):
                 with self.subTest(raw=raw):

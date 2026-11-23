@@ -44,8 +44,9 @@ const bridge = {
   read_plan_notes: async () => ({ notes: [{ path: 'note.md', content: source, version: 'v1' }], next_index: 1 }),
   plan_link_targets_batch: async (_id, _from, _to, notes) => notes.map(({ targets }) => targets.map(target => target.startsWith('a.md') ? target.replace('a.md', 'new.md') : null)),
 }
-const rewrites = await planMoveLinks(bridge, 'workspace', 'a.md', 'new.md')
+const { rewrites, snapshots } = await planMoveLinks(bridge, 'workspace', 'a.md', 'new.md')
 assert.equal(rewrites.length, 1)
+assert.deepEqual(snapshots, [{ path: 'note.md', version: 'v1' }])
 assert.equal(rewrites[0].version, 'v1')
 assert.ok(rewrites[0].content.includes('[first](new.md#part)'))
 const controller = new AbortController()

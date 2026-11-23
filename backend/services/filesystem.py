@@ -185,37 +185,50 @@ class FileTree:
         self.refresh(key)
         return f"{key}/{name}" if key else name
 
-    def move_entry(self, source: str, destination: str) -> str:
-        """Move an entry without replacing an existing destination on Windows."""
+    def validate_move_entry(
+        self, source: str, destination: str
+    ) -> tuple[Path, Path, bool]:
+        """Check the paths and return the Windows rename operands."""
         if os.name != "nt":
-            raise NotImplementedError("Safe moves are currently supported on Windows only")
-        source_key, source_path = self._path(source)
-        destination_key, _ = self._path(destination)
-        if not source_key or not destination_key:
-            raise ValueError("The workspace root cannot be moved or replaced")
-        self._validate_name(Path(destination_key).name)
-        _, destination_parent = self._path(str(Path(destination_key).parent))
-        destination_path = destination_parent / Path(destination_key).name
-        # Avoid following links and junctions while moving entries or choosing their parents.
-        for key in (source_key, destination_key):
+            raise NotImplementedError("Safe moves are currently supported on Windows")
+        # Check the entry and every parent without following links or junctions.
+        for key in (source, destination):
+            if not isinstance(key, str) or not key or Path(key).as_posix() != key:
+                raise ValueError("Expected a canonical workspace-relative move path")
             current = self.root
-            for part in Path(key).parts:
+            for part in key.split("/"):
+                self._validate_name(part)
                 current = current / part
                 if current.is_symlink() or current.is_junction():
-                    raise ValueError("Moving through links or junctions is not supported")
-        if source_key == destination_key:
-            if not source_path.exists():
-                raise FileNotFoundError(str(source_path))
-            return destination_key
+                    raise ValueError("Cannot move through a link or junction")
+        _, source_path = self._path(source)
+        _, destination_parent = self._path(Path(destination).parent.as_posix())
+        if not source_path.exists():
+            raise FileNotFoundError(f"Move source does not exist: {source}")
+        if not destination_parent.is_dir():
+            raise NotADirectoryError(f"Destination folder is unavailable: {destination}")
+        destination_path = destination_parent / Path(destination).name
         is_directory = source_path.is_dir()
-        if is_directory and destination_path != source_path and destination_path.is_relative_to(source_path):
-            raise ValueError("A folder cannot be moved inside itself")
-        # Windows rename fails if the target exists; a prior existence check alone would race.
+        if destination_path != source_path:
+            if is_directory and destination_path.is_relative_to(source_path):
+                raise ValueError("A folder cannot be moved inside itself")
+            if destination_path.exists():
+                raise FileExistsError(f"The destination already exists: {destination}")
+        return source_path, destination_path, is_directory
+
+    def move_entry(self, source: str, destination: str) -> str:
+        """Move an entry without replacing an existing destination on Windows."""
+        source_path, destination_path, is_directory = self.validate_move_entry(
+            source, destination
+        )
+        if source == destination:
+            return destination
+        # The Windows rename also fails if another process creates the destination.
         source_path.rename(destination_path)
         if is_directory:
             with self._condition:
-                # Drop old cache entries; scans already in flight must not publish into a replacement entry.
-                prefix = os.path.normcase(source_key).replace("\\", "/")
+                # Drop old cache entries so in-flight scans cannot repopulate them.
+                prefix = os.path.normcase(source).replace("\\", "/")
                 for key in list(self._directories):
                     normalized = os.path.normcase(key).replace("\\", "/")
                     if normalized == prefix or normalized.startswith(prefix + "/"):
@@ -224,7 +237,7 @@ class FileTree:
             self._signal()
         self.path_changed(source_path, invalidate_descendants=True)
         self.path_changed(destination_path, invalidate_descendants=True)
-        return destination_key
+        return destination
 
     def _changed(self) -> None:
         self._revision += 1

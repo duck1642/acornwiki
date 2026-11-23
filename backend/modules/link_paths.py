@@ -1,6 +1,7 @@
 """Calculate workspace-relative link paths after a file or folder move."""
 
 import html
+import html.entities
 import ntpath
 import os
 import posixpath
@@ -9,7 +10,7 @@ import string
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 from backend.modules.notes import resolve_note_link
 
@@ -22,6 +23,7 @@ class MarkdownTarget:
     angled: bool
     encoded_unicode: bool
     fragment: str
+    has_query: bool
 
 
 def _unescape_markdown(value: str) -> str:
@@ -31,15 +33,16 @@ def _unescape_markdown(value: str) -> str:
         + re.escape(string.punctuation)
         + r"])|(&\#(?:[xX][0-9a-fA-F]+|[0-9]+);|&[a-zA-Z][a-zA-Z0-9]+;)"
     )
-    return re.sub(
-        pattern,
-        lambda match: (
-            match.group(1)
-            if match.group(1) is not None
-            else html.unescape(match.group(2))
-        ),
-        value,
-    )
+
+    def replace(match: re.Match[str]) -> str:
+        if match.group(1) is not None:
+            return match.group(1)
+        entity = match.group(2)
+        if not entity.startswith("&#") and entity[1:] not in html.entities.html5:
+            return entity
+        return html.unescape(entity)
+
+    return re.sub(pattern, replace, value)
 
 
 def parse_markdown_target(
@@ -52,26 +55,32 @@ def parse_markdown_target(
     inner = raw_target[1:-1] if angled else raw_target
     decoded = _unescape_markdown(inner)
     parts = urlsplit(decoded)
-    if (
-        parts.scheme
-        or parts.netloc
-        or "?" in decoded.split("#", 1)[0]
-        or not parts.path
-    ):
+    if parts.scheme or parts.netloc or not parts.path:
         return None
+    has_query = "?" in decoded.split("#", 1)[0]
     # Reject fragment delimiters that cannot be split from the raw text safely.
     raw_path, separator, raw_fragment = inner.partition("#")
-    if _unescape_markdown(raw_path) != parts.path or (parts.fragment and not separator):
+    if not has_query and (
+        _unescape_markdown(raw_path) != parts.path or (parts.fragment and not separator)
+    ):
         raise ValueError("Cannot preserve this Markdown fragment safely")
-    path, _ = resolve_note_link(root, note, decoded)
+    try:
+        unquote(parts.path, errors="strict")
+    except UnicodeDecodeError as error:
+        raise ValueError("Link path has invalid UTF-8 encoding") from error
+    path, _ = resolve_note_link(root, note, parts.path)
     encoded_unicode = bool(re.search(r"%(?:[c-fC-F][0-9a-fA-F])", raw_path))
-    return MarkdownTarget(path, angled, encoded_unicode, separator + raw_fragment)
+    return MarkdownTarget(
+        path, angled, encoded_unicode, separator + raw_fragment, has_query
+    )
 
 
 def format_markdown_target(target: MarkdownTarget, relative_path: str) -> str:
     """Format a new path and preserve the relevant original syntax."""
     if not isinstance(relative_path, str) or not relative_path or "\\" in relative_path:
         raise ValueError("Expected a relative URL path")
+    if target.has_query:
+        raise ValueError("Cannot safely rewrite a local Markdown link with a query")
     encoded = []
     for char in relative_path:
         if (
@@ -155,6 +164,8 @@ def resolve_moved_targets(
             results.append(None)
             continue
         new_path = link_path_after_move(note, target.path, source, destination)
+        if new_path is not None and target.has_query:
+            raise ValueError(f"Cannot rewrite a local link with a query in {note}")
         results.append(
             None if new_path is None else format_markdown_target(target, new_path)
         )

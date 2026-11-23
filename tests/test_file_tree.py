@@ -10,6 +10,12 @@ from typing import Callable
 from unittest.mock import patch
 
 from backend.app.bridge import Bridge
+from backend.modules.notes import (
+    NoteConflictError,
+    NoteSnapshot,
+    NoteVersion,
+    save_note,
+)
 from backend.services.filesystem import (
     DirectorySnapshot,
     FileTree,
@@ -29,6 +35,136 @@ def wait_until(predicate: Callable[[], bool], timeout: float = 5) -> None:
 
 def directory(tree: FileTree, path: str) -> DirectorySnapshot:
     return next(d for d in tree.snapshot()["directories"] if d["path"] == path)
+
+
+@unittest.skipUnless(os.name == "nt", "Windows rename semantics")
+class MoveCommitTests(unittest.TestCase):
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.bridge = Bridge()
+        self.addCleanup(self.bridge._close)
+        self.workspace = self.bridge.open_workspace(str(self.root))["workspace_id"]
+
+    def versions(self) -> list[NoteVersion]:
+        return [
+            {
+                "path": path,
+                "version": self.bridge.read_note(self.workspace, path)["version"],
+            }
+            for path in self.bridge.list_plan_notes(self.workspace)
+        ]
+
+    def test_move_folder_rebases_rewrites_and_active_note(self) -> None:
+        (self.root / "docs").mkdir()
+        (self.root / "archive").mkdir()
+        (self.root / "docs" / "a.md").write_bytes(b"[outside](../b.md)\r\n")
+        (self.root / "docs" / "b.md").write_bytes(b"[internal](a.md)")
+        (self.root / "b.md").write_bytes(b"[inside](docs/a.md)")
+        self.bridge.set_active_note(self.workspace, "docs/a.md")
+        versions = self.versions()
+        rewrites: list[NoteSnapshot] = [
+            {**versions[0], "content": "[inside](archive/docs/a.md)"},
+            {**versions[1], "content": "[outside](../../b.md)\r\n"},
+        ]
+
+        result = self.bridge.commit_move(
+            self.workspace, "docs", "archive/docs", versions, rewrites
+        )
+
+        self.assertEqual(
+            result,
+            {
+                "destination": "archive/docs",
+                "updated": ["b.md", "archive/docs/a.md"],
+                "failures": [],
+            },
+        )
+        self.assertFalse((self.root / "docs").exists())
+        moved = self.root / "archive" / "docs"
+        self.assertEqual((moved / "a.md").read_bytes(), b"[outside](../../b.md)\r\n")
+        self.assertEqual((moved / "b.md").read_bytes(), b"[internal](a.md)")
+        self.assertEqual(
+            (self.root / "b.md").read_bytes(), b"[inside](archive/docs/a.md)"
+        )
+        self.assertEqual(
+            self.bridge._active_note, os.path.normcase(str(moved / "a.md"))
+        )
+
+    def test_destination_conflicts_and_stale_notes_stop_before_the_rename(self) -> None:
+        source = self.root / "old.md"
+        source.write_bytes(b"old")
+        destination = self.root / "new.md"
+        destination.write_bytes(b"existing")
+        link = self.root / "link.md"
+        link.write_bytes(b"[link](old.md)")
+        outside = self.root / "outside.md"
+        outside.write_bytes(b"original")
+        versions = self.versions()
+        rewrites: list[NoteSnapshot] = [{**versions[0], "content": "[link](new.md)"}]
+        with self.assertRaises(FileExistsError):
+            self.bridge.commit_move(
+                self.workspace, "old.md", "new.md", versions, rewrites
+            )
+        self.assertEqual(destination.read_bytes(), b"existing")
+        destination.unlink()
+        versions = self.versions()
+        outside.write_bytes(b"changed")
+        with self.assertRaisesRegex(NoteConflictError, "outside.md"):
+            self.bridge.commit_move(
+                self.workspace, "old.md", "new.md", versions, rewrites
+            )
+        self.assertTrue(source.exists())
+        self.assertFalse(destination.exists())
+        self.assertEqual(link.read_bytes(), b"[link](old.md)")
+
+    def test_rename_without_link_updates_keeps_markdown_extension(self) -> None:
+        (self.root / "old.md").write_bytes(b"old")
+        link = self.root / "link.md"
+        link.write_bytes(b"[link](old.md?version=1)")
+        with self.assertRaisesRegex(ValueError, r"keep its \.md extension"):
+            self.bridge.commit_move(self.workspace, "old.md", "new.txt", None, [])
+        self.assertTrue((self.root / "old.md").exists())
+        self.assertEqual(
+            self.bridge.commit_move(self.workspace, "old.md", "New.MD", None, []),
+            {"destination": "New.MD", "updated": [], "failures": []},
+        )
+        self.assertEqual((self.root / "New.MD").read_bytes(), b"old")
+        self.assertEqual(link.read_bytes(), b"[link](old.md?version=1)")
+
+    def test_failure_after_rename_reports_the_note_and_continues(self) -> None:
+        (self.root / "old.png").write_bytes(b"image")
+        (self.root / "a.md").write_bytes(b"[image](old.png)")
+        (self.root / "b.md").write_bytes(b"[image](old.png)")
+        versions = self.versions()
+        rewrites: list[NoteSnapshot] = [
+            {**version, "content": "[image](new.png)"} for version in versions
+        ]
+
+        def save_with_external_edit(
+            root: Path, path: str, content: str, version: str
+        ) -> NoteSnapshot:
+            if path == "a.md":
+                (root / path).write_bytes(b"external edit")
+            return save_note(root, path, content, version)
+
+        with patch("backend.app.bridge.save_note", side_effect=save_with_external_edit):
+            result = self.bridge.commit_move(
+                self.workspace, "old.png", "new.png", versions, rewrites
+            )
+
+        self.assertEqual(
+            result,
+            {
+                "destination": "new.png",
+                "updated": ["b.md"],
+                "failures": [{"path": "a.md", "error": "Note changed on disk"}],
+            },
+        )
+        self.assertEqual((self.root / "new.png").read_bytes(), b"image")
+        self.assertEqual((self.root / "a.md").read_bytes(), b"external edit")
+        self.assertEqual((self.root / "b.md").read_bytes(), b"[image](new.png)")
 
 
 class FileTreeTests(unittest.TestCase):

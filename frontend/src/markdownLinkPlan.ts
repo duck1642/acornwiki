@@ -42,17 +42,19 @@ interface PlanBridge {
 
 /** Prepare note rewrites without changing any workspace file. */
 export async function planMoveLinks(
-  api: PlanBridge, workspaceId: string, source: string, destination: string, signal?: AbortSignal,
-): Promise<NoteSnapshot[]> {
+  api: PlanBridge, workspaceId: string, source: string, destination: string, signal?: AbortSignal, updateLinks = true,
+): Promise<{ rewrites: NoteSnapshot[]; snapshots: { path: string; version: string }[] }> {
   const paths = await api.list_plan_notes(workspaceId)
   signal?.throwIfAborted()
   const rewrites: NoteSnapshot[] = []
+  const snapshots: { path: string; version: string }[] = []
   let index = 0
   while (index < paths.length) {
     const batch = await api.read_plan_notes(workspaceId, paths, index, 2_000_000, 50)
     signal?.throwIfAborted()
     if (batch.next_index <= index || batch.next_index > paths.length || batch.notes.length !== batch.next_index - index) throw new Error('Invalid note batch')
-    const candidates = batch.notes.map(note => ({ note, ranges: collectMarkdownTargets(note.content) })).filter(item => item.ranges.length)
+    snapshots.push(...batch.notes.map(({ path, version }) => ({ path, version })))
+    const candidates = updateLinks ? batch.notes.map(note => ({ note, ranges: collectMarkdownTargets(note.content) })).filter(item => item.ranges.length) : []
     const replacements = candidates.length ? await api.plan_link_targets_batch(workspaceId, source, destination, candidates.map(({ note, ranges }) => ({ path: note.path, targets: ranges.map(range => range.target) }))) : []
     signal?.throwIfAborted()
     if (replacements.length !== candidates.length) throw new Error('Invalid target batch')
@@ -64,5 +66,5 @@ export async function planMoveLinks(
     await new Promise<void>(resolve => setTimeout(resolve, 0))
     signal?.throwIfAborted()
   }
-  return rewrites
+  return { rewrites, snapshots }
 }

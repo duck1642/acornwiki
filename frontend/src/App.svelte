@@ -24,6 +24,10 @@
     set_tree_sort: (id: string, sort: SortMode) => Promise<TreeSnapshot>
     refresh_tree: (id: string, path: string | null) => Promise<TreeSnapshot>
     read_note: (id: string, path: string) => Promise<NoteSnapshot>
+    list_plan_notes: (id: string) => Promise<string[]>
+    read_plan_notes: (id: string, paths: string[], start: number, maxBytes: number, maxNotes: number) => Promise<{ notes: NoteSnapshot[]; next_index: number }>
+    plan_link_targets_batch: (id: string, source: string, destination: string, notes: { path: string; targets: string[] }[]) => Promise<(string | null)[][]>
+    commit_move: (id: string, source: string, destination: string, snapshots: { path: string; version: string }[] | null, rewrites: NoteSnapshot[]) => Promise<{ destination: string; updated: string[]; failures: { path: string; error: string }[] }>
     create_note: (id: string, directory: string, name: string) => Promise<string>
     create_directory: (id: string, directory: string, name: string) => Promise<string>
     resolve_note_link: (id: string, note: string, href: string) => Promise<{ path: string; fragment: string }>
@@ -47,6 +51,7 @@
   import { onMount, tick } from 'svelte'
   import NoteEditor from './NoteEditor.svelte'
   import { openWorkspaceFile } from './fileActions'
+  import { planMoveLinks } from './markdownLinkPlan'
 
   let ready = $state(false)
   let message = $state('Waiting for backend...')
@@ -66,6 +71,9 @@
   let expandedFolders = $state<string[]>([])
   let creationFolder = $state('')
   let creating = $state(false)
+  let moving = $state(false)
+  let editorMounted = $state(true)
+  let automaticLinkUpdate = true
   let watcherError = $state<string | null>(null)
   let visibleTree = $derived(buildVisibleTree())
   let rootDirectory = $derived(directories[''])
@@ -126,6 +134,7 @@
       if (detail?.key === 'close_request') void closeWindow()
     }
     async function closeWindow() {
+      if (moving) return
       if (!editor || await editor.prepareClose()) await window.pywebview?.api?.finish_close()
     }
     function updateBridgeStatus() {
@@ -196,7 +205,8 @@
     if (viewport) viewport.scrollTop = 0
     sortMode = 'alphabetic'
     try {
-      await api.get_workspace_settings(path)
+      const preferences = await api.get_workspace_settings(path)
+      automaticLinkUpdate = preferences.automatic_link_update !== false
       const snapshot = await api.open_workspace(path)
       workspaceId = snapshot.workspace_id
       selectedWorkspace = path
@@ -235,6 +245,38 @@
       if (id === workspaceId) workspaceMessage = 'Could not create the item. Check its name, location, and whether it already exists.'
       console.error(error)
     } finally { creating = false }
+  }
+  async function moveEntry(source: string) {
+    const api = window.pywebview?.api
+    const id = workspaceId
+    if (!api || !id || moving) return
+    const destination = window.prompt('Move or rename to (workspace-relative path):', source)
+    if (destination === null || destination === source) return
+    moving = true
+    workspaceMessage = ''
+    try {
+      if (editor && !(await editor.prepareClose())) return
+      // Close the approved editor before planning so edits cannot race with the move.
+      editorMounted = false
+      selectedNote = null
+      await tick()
+      workspaceMessage = 'Preparing link updates...'
+      const plan = automaticLinkUpdate ? await planMoveLinks(api, id, source, destination) : null
+      workspaceMessage = 'Moving and updating links...'
+      const result = await api.commit_move(id, source, destination, plan?.snapshots ?? null, plan?.rewrites ?? [])
+      expandedFolders = []
+      creationFolder = ''
+      await syncTree()
+      workspaceMessage = result.failures.length
+        ? `Moved, but some notes could not be updated: ${result.failures.map(item => `${item.path}: ${item.error}`).join('; ')}`
+        : `Moved. Updated links in ${result.updated.length} notes.`
+    } catch (error) {
+      workspaceMessage = `Could not complete the move: ${String(error)}`
+      console.error(error)
+    } finally {
+      editorMounted = true
+      moving = false
+    }
   }
   async function changeSortMode(event: Event) {
     const target = event.currentTarget
@@ -318,12 +360,12 @@
   <h2>Workspaces</h2>
   {#if workspacesLoaded && workspaces.length === 0}<p>No saved workspaces.</p>{/if}
   {#if workspaces.length > 0}
-    <ul class="workspace-list">{#each workspaces as workspace}<li><button onclick={() => selectWorkspace(workspace)} disabled={loadingWorkspace}>{workspace}</button></li>{/each}</ul>
+    <ul class="workspace-list">{#each workspaces as workspace}<li><button onclick={() => selectWorkspace(workspace)} disabled={loadingWorkspace || moving}>{workspace}</button></li>{/each}</ul>
   {/if}
   {#if selectedWorkspace}
     <p>Selected workspace: <code>{selectedWorkspace}</code></p>
     <div class="workspace-layout">
-    <section class="file-tree" aria-label="Workspace file tree">
+    <section class="file-tree" aria-label="Workspace file tree" inert={moving}>
       <div class="tree-heading">
         <h2>File tree</h2>
         <button onclick={() => refreshTree(null)}>Refresh</button>
@@ -352,6 +394,7 @@
                   {:else if row.path.toLowerCase().endsWith('.md')}
                     <button class="tree-file tree-note" class:selected={selectedNote === row.path} aria-current={selectedNote === row.path ? 'true' : undefined} title={row.item.name} onclick={() => editor?.open(row.path)} onkeydown={handleTreeKeydown}>{row.item.name}</button>
                   {:else}<button class="tree-file" title={row.item.name} onclick={() => openTreeFile(row.path)} onkeydown={handleTreeKeydown}>{row.item.name}</button>{/if}
+                  <button aria-label={`Move or rename ${row.item.name}`} onclick={() => moveEntry(row.path)}>Move</button>
                 </div>
               {:else}
                 <div class="tree-status" style={`padding-left: ${8 + row.depth * 20}px`}>
@@ -364,7 +407,7 @@
         </ul>
       </div>
     </section>
-    {#if workspaceId}<NoteEditor bind:this={editor} bind:selectedNote {workspaceId} />{/if}
+    {#if workspaceId && editorMounted}<NoteEditor bind:this={editor} bind:selectedNote {workspaceId} />{/if}
     </div>
   {/if}
   {#if workspaceMessage}<p role="alert">{workspaceMessage}</p>{/if}

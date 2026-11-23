@@ -11,10 +11,12 @@ from urllib.parse import urlsplit
 
 from backend.app.settings import SETTINGS_PATH, load_settings, save_settings
 from backend.app.workspace import load_workspace_settings
-from backend.modules.link_paths import resolve_moved_targets
+from backend.modules.link_paths import path_after_move, resolve_moved_targets
 from backend.modules.notes import (
     NoteBatch,
+    NoteConflictError,
     NoteSnapshot,
+    NoteVersion,
     list_markdown_notes,
     markdown_name,
     note_path,
@@ -22,6 +24,8 @@ from backend.modules.notes import (
     read_note_batch,
     resolve_note_link,
     save_note,
+    validate_note_rewrites,
+    validate_note_scan,
 )
 from backend.services.filesystem import FileTree, TreeSnapshot
 
@@ -39,6 +43,17 @@ class Window(Protocol):
 class NoteTargets(TypedDict):
     path: str
     targets: list[str]
+
+
+class MoveFailure(TypedDict):
+    path: str
+    error: str
+
+
+class MoveResult(TypedDict):
+    destination: str
+    updated: list[str]
+    failures: list[MoveFailure]
 
 
 class Bridge:
@@ -222,6 +237,86 @@ class Bridge:
                 resolve_moved_targets(root, note["path"], source, destination, note["targets"])
                 for note in notes
             ]
+
+    def validate_link_plan(
+        self,
+        workspace_id: str,
+        snapshots: list[NoteVersion],
+        rewrites: list[NoteSnapshot],
+    ) -> None:
+        """Check a plan against the workspace without moving or writing files."""
+        with self._lock:
+            root = self._require_tree(workspace_id).root
+            validate_note_scan(root, snapshots)
+            validate_note_rewrites(root, rewrites)
+            versions = {item["path"]: item["version"] for item in snapshots}
+            if any(versions.get(item["path"]) != item["version"] for item in rewrites):
+                raise ValueError("Rewrites must belong to the scanned note versions")
+
+    def commit_move(
+        self,
+        workspace_id: str,
+        source: str,
+        destination: str,
+        snapshots: list[NoteVersion] | None,
+        rewrites: list[NoteSnapshot],
+    ) -> MoveResult:
+        """Move one entry, then save the planned rewrites at their new paths."""
+        with self._lock:
+            tree = self._require_tree(workspace_id)
+            source_path, destination_path, is_directory = tree.validate_move_entry(
+                source, destination
+            )
+            if source == destination:
+                raise ValueError("Choose a different destination")
+            if (
+                not is_directory
+                and source_path.suffix.lower() == ".md"
+                and destination_path.suffix.lower() != ".md"
+            ):
+                raise ValueError("A Markdown note must keep its .md extension")
+            if snapshots is None:
+                if rewrites != []:
+                    raise ValueError("Note rewrites require a complete scan")
+            else:
+                self.validate_link_plan(workspace_id, snapshots, rewrites)
+
+            moved_rewrites = [
+                (path_after_move(note["path"], source, destination), note)
+                for note in rewrites
+            ]
+            moved_active_note = None
+            if self._active_note is not None:
+                active = Path(self._active_note).relative_to(tree.root).as_posix()
+                moved_active = path_after_move(active, source, destination)
+                if moved_active != active:
+                    moved_active_note = tree.root / moved_active
+
+            # The bridge lock serializes app operations. External writers can still
+            # change files between checks, the rename, and individual note saves.
+            tree.move_entry(source, destination)
+            if moved_active_note is not None:
+                self._active_note = os.path.normcase(os.path.abspath(moved_active_note))
+
+            result: MoveResult = {
+                "destination": destination,
+                "updated": [],
+                "failures": [],
+            }
+            for path, note in moved_rewrites:
+                try:
+                    if note_path(tree.root, path) != tree.root / path:
+                        raise NoteConflictError(
+                            "Note path changed to a link or junction"
+                        )
+                    save_note(tree.root, path, note["content"], note["version"])
+                except (OSError, NoteConflictError, ValueError) as error:
+                    result["failures"].append({"path": path, "error": str(error)})
+                else:
+                    result["updated"].append(path)
+            if moved_active_note is not None:
+                self._note_changed(moved_active_note)
+            return result
 
     def resolve_note_link(
         self, workspace_id: str, note: str, href: str
