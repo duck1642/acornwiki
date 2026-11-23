@@ -41,11 +41,13 @@ def scan_dir(folder: Path, include_date_metadata: bool = False) -> list[FileTree
 
 def sort_items(items: list[FileTreeItem], sort_mode: str) -> list[FileTreeItem]:
     if sort_mode in ("alphabetic", "alphabetic_desc"):
-        return sorted(
+        # Sort names first, then group directories without reversing their group order.
+        by_name = sorted(
             items,
             key=lambda item: item["name"].casefold(),
             reverse=sort_mode == "alphabetic_desc",
         )
+        return sorted(by_name, key=lambda item: not item["is_directory"])
     if sort_mode in ("modified", "modified_asc", "created", "created_asc"):
         key = "created_time" if sort_mode.startswith("created") else "modified_time"
         return sorted(

@@ -26,6 +26,16 @@ from backend.services.filesystem import (
 
 
 class SortOptionsTests(unittest.TestCase):
+    def test_name_sort_keeps_folders_before_files_in_both_directions(self) -> None:
+        items: list[FileTreeItem] = [
+            {"name": "a.md", "is_directory": False, "modified_time": None, "created_time": None},
+            {"name": "z-folder", "is_directory": True, "modified_time": None, "created_time": None},
+            {"name": "z.md", "is_directory": False, "modified_time": None, "created_time": None},
+            {"name": "a-folder", "is_directory": True, "modified_time": None, "created_time": None},
+        ]
+        self.assertEqual([item["name"] for item in sort_items(items, "alphabetic")], ["a-folder", "z-folder", "a.md", "z.md"])
+        self.assertEqual([item["name"] for item in sort_items(items, "alphabetic_desc")], ["z-folder", "a-folder", "z.md", "a.md"])
+
     def test_bridge_sorts_without_an_open_note(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             bridge = Bridge()
