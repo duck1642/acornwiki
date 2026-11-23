@@ -44,6 +44,13 @@ const net = require('node:net');
         { name: 'other.md', is_directory: false, modified_time: null },
       ];
       const registrations = [];
+      let releaseRegistration;
+      window.holdRegistration = false;
+      window.registrationHeld = false;
+      window.rejectRegistration = false;
+      window.holdReads = false;
+      window.heldReads = [];
+      window.releaseRegistration = () => releaseRegistration?.();
       const reads = [];
       const signal = key => state.dispatchEvent(new CustomEvent('change', { detail: { key } }));
       const snapshot = () => ({
@@ -88,7 +95,9 @@ const net = require('node:net');
             reads.push(notePath);
             const note = notes.get(notePath);
             if (!note) throw Error('missing note');
-            return { path: notePath, content: note.content, version: note.version };
+            const result = { path: notePath, content: note.content, version: note.version };
+            if (window.holdReads) await new Promise(resolve => window.heldReads.push(resolve));
+            return result;
           },
           save_note: async (_id, notePath, content, expectedVersion) => {
             const note = notes.get(notePath);
@@ -98,6 +107,8 @@ const net = require('node:net');
             return result;
           },
           set_open_notes: async (_id, paths) => {
+            if (window.rejectRegistration) throw Error('registration failed');
+            if (window.holdRegistration) await new Promise(resolve => { releaseRegistration = resolve; window.registrationHeld = true; });
             registrations.push([...paths]);
           },
           set_active_note: async () => {},
@@ -121,6 +132,21 @@ const net = require('node:net');
     const otherTab = page.locator('.document-tab').filter({ hasText: 'other.md' }).getByRole('tab');
     const panelFor = notePath => page.locator(`.note-panel[data-note-path="${notePath}"]`);
     const editorFor = notePath => panelFor(notePath).locator('.cm-content');
+    await editorFor('note.md').waitFor();
+    await page.evaluate(() => { window.holdRegistration = true; });
+    await page.getByRole('button', { name: 'other.md', exact: true }).click();
+    await page.waitForFunction(() => document.querySelector('[data-note-path="note.md"] .cm-content')?.getAttribute('contenteditable') === 'false');
+    await page.waitForFunction(() => window.registrationHeld);
+    await page.evaluate(() => { window.holdRegistration = false; window.releaseRegistration(); });
+    await editorFor('other.md').waitFor();
+    await page.getByRole('button', { name: 'note.md', exact: true }).click();
+    await editorFor('note.md').waitFor();
+    await page.evaluate(() => { window.rejectRegistration = true; });
+    await page.getByRole('button', { name: 'Navigate back' }).click();
+    await page.getByText('Could not update the open note list.').waitFor();
+    assert.equal(await editorFor('note.md').isVisible(), true);
+    assert.equal(await page.getByRole('button', { name: 'Navigate back' }).isEnabled(), true);
+    await page.evaluate(() => { window.rejectRegistration = false; });
     const expectRegistration = async paths => {
       const expected = [...paths].sort();
       await page.waitForFunction(value => {
@@ -132,6 +158,26 @@ const net = require('node:net');
     await noteTab.waitFor();
     await editorFor('note.md').waitFor();
     await expectRegistration(['note.md']);
+
+    await page.evaluate(() => window.externalNoteChange('note.md', '# Root\n\n<h2>Raw title</h2>\n\n## Real Markdown\n\n## [Reference heading][ref]\n\n[ref]: /docs'));
+    await page.getByRole('link', { name: 'Reference heading', exact: true }).waitFor();
+    await page.getByRole('link', { name: 'Real Markdown', exact: true }).click();
+    assert.equal(await page.evaluate(() => getSelection()?.anchorNode?.parentElement?.closest('.cm-line')?.textContent), '## Real Markdown');
+    await page.getByRole('link', { name: 'Reference heading', exact: true }).click();
+    assert.equal(await page.evaluate(() => getSelection()?.anchorNode?.parentElement?.closest('.cm-line')?.textContent), '## [Reference heading][ref]');
+    await page.evaluate(() => window.externalNoteChange('note.md', '# Root'));
+    await page.waitForFunction(() => document.querySelector('[data-note-path="note.md"] .cm-content')?.textContent === '# Root');
+
+    await page.evaluate(() => { window.holdReads = true; window.externalNoteChange('note.md', '# Remote A'); });
+    await page.waitForFunction(() => window.heldReads.length >= 1);
+    await page.evaluate(() => window.externalNoteChange('note.md', '# Remote B'));
+    await page.waitForTimeout(350);
+    await page.evaluate(() => window.heldReads.shift()());
+    await page.waitForFunction(() => window.heldReads.length >= 1);
+    await page.evaluate(() => { window.holdReads = false; window.heldReads.shift()(); });
+    await page.waitForFunction(() => document.querySelector('[data-note-path="note.md"] .cm-content')?.textContent === '# Remote B');
+    await page.evaluate(() => window.externalNoteChange('note.md', '# Root'));
+    await page.waitForFunction(() => document.querySelector('[data-note-path="note.md"] .cm-content')?.textContent === '# Root');
 
     await editorFor('note.md').click();
     await page.keyboard.press('End');

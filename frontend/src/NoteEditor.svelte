@@ -6,7 +6,7 @@
   import { markdown } from '@codemirror/lang-markdown'
   import { ensureSyntaxTree, HighlightStyle, syntaxHighlighting } from '@codemirror/language'
   import { tags } from '@lezer/highlight'
-  import { marked } from 'marked'
+  import { Lexer, marked } from 'marked'
   import DOMPurify from 'dompurify'
   import Icon from './Icon.svelte'
   import { openWorkspaceFile } from './fileActions'
@@ -73,6 +73,8 @@
   let externalTimer: ReturnType<typeof setTimeout> | undefined
   let saveTimer: ReturnType<typeof setTimeout> | undefined
   let savePromise: Promise<boolean> | undefined
+  let externalCheckPromise: Promise<void> | undefined
+  let externalCheckPending = false
   let mediaUrl = $state('')
   let dirty = $derived(text !== savedText)
   let rendered = $derived(renderMarkdown(text, path, mediaUrl))
@@ -132,12 +134,25 @@
       panel.querySelector('.note-read')?.querySelector(`#${CSS.escape(id)}`)?.scrollIntoView({ block: 'start' })
       return
     }
-    const index = outline.findIndex((heading) => heading.id === id)
+    const heading = outline.find((item) => item.id === id)
     const tree = ensureSyntaxTree(view.state, view.state.doc.length, 1000)
-    if (!tree || index < 0) return
+    if (!tree || !heading) return
     const positions: number[] = []
-    tree.iterate({ enter(node) { if (/^(ATX|Setext)Heading[1-6]$/.test(node.name)) positions.push(node.from) } })
-    const position = positions[index]
+    const links = marked.lexer(text).links
+    tree.iterate({ enter(node) {
+      if (!/^(ATX|Setext)Heading[1-6]$/.test(node.name)) return
+      const lexer = new Lexer()
+      lexer.tokens.links = links
+      const html = marked.parser(lexer.lex(view.state.sliceDoc(node.from, node.to)))
+      const template = document.createElement('template')
+      template.innerHTML = DOMPurify.sanitize(html)
+      const parsed = template.content.querySelector('h1,h2,h3,h4,h5,h6')
+      if (parsed?.textContent?.trim() === heading.label && Number(parsed.tagName.slice(1)) === heading.level) positions.push(node.from)
+    } })
+    const matches = outline.filter((item) => item.label === heading.label && item.level === heading.level)
+    // Avoid jumping to the wrong heading if raw HTML produced an indistinguishable entry.
+    if (matches.length !== positions.length) return
+    const position = positions[matches.findIndex((item) => item.id === id)]
     if (position === undefined) return
     view.dispatch({ selection: { anchor: position }, effects: EditorView.scrollIntoView(position, { y: 'start' }) })
     view.focus()
@@ -393,13 +408,28 @@
   }
 
   async function checkExternal() {
+    externalCheckPending = true
+    if (externalCheckPromise) return externalCheckPromise
+    externalCheckPromise = (async () => {
+      while (externalCheckPending && !disposed) {
+        externalCheckPending = false
+        await checkExternalOnce()
+      }
+    })()
+    try { await externalCheckPromise }
+    finally { externalCheckPromise = undefined }
+  }
+
+  async function checkExternalOnce() {
     const api = window.pywebview?.api
-    if (disposed || !path || !api) return
+    if (disposed || !api) return
+    if (!path) { await loadNote(); return }
     const token = operation
     const checkedVersion = version
     try {
       const note = await api.read_note(workspaceId, path)
-      if (token !== operation || checkedVersion !== version) return
+      if (token !== operation) return
+      if (checkedVersion !== version) { externalCheckPending = true; return }
       if (note.version === version) {
         const resolved = conflict
         conflict = false
@@ -422,7 +452,8 @@
         message = 'File changed externally. Your editor content was kept.'
       }
     } catch (reason) {
-      if (token !== operation || checkedVersion !== version) return
+      if (token !== operation) return
+      if (checkedVersion !== version) { externalCheckPending = true; return }
       clearTimeout(saveTimer)
       conflict = true
       missing = true

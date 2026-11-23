@@ -410,76 +410,86 @@
     navIndex = navHistory.length - 1
   }
 
-  async function openNote(path: string, fragment?: string, options?: { newTab?: boolean; fromHistory?: boolean }) {
+  async function openNote(path: string, fragment?: string, options?: { newTab?: boolean; historyDelta?: number }) {
     const requestedWorkspaceId = workspaceId
     const newTab = Boolean(options?.newTab)
-    const fromHistory = Boolean(options?.fromHistory)
     return serializeTabAction(async () => {
       if (!requestedWorkspaceId || requestedWorkspaceId !== workspaceId || tabsLocked) return
+      const historyIndex = options?.historyDelta === undefined ? undefined : navIndex + options.historyDelta
+      if (historyIndex !== undefined) {
+        const target = navHistory[historyIndex]
+        if (!target) return
+        path = target
+      }
       const key = notePathKey(path)
       const existing = noteTabs.find((tab) => tab.key === key)
       if (existing) {
         activeTabKey = existing.key
-        if (!fromHistory) recordNavigation(existing.path)
+        if (historyIndex === undefined) recordNavigation(existing.path)
+        else navIndex = historyIndex
         if (fragment) {
           await tick()
           await editors[existing.key]?.navigateToFragment(fragment)
         }
         return
       }
-      const currentIndex = !newTab && activeTabKey && activeTabKey !== settingsTabKey
-        ? noteTabs.findIndex((tab) => tab.key === activeTabKey)
-        : -1
-      const currentTab = currentIndex >= 0 ? noteTabs[currentIndex] : undefined
-      const currentEditor = currentTab ? editors[currentTab.key] : undefined
-      const currentStatus = currentTab ? (currentEditor?.closeStatus() ?? tabStatuses[currentTab.key]) : undefined
-      const canReplace = Boolean(
-        currentTab &&
-        !currentEditor?.hasUnsavedWork() &&
-        !currentStatus?.dirty &&
-        !currentStatus?.saving &&
-        !currentStatus?.conflict,
-      )
-      const next = canReplace && currentTab
-        ? noteTabs.map((tab, index) => (index === currentIndex ? { key, path } : tab))
-        : [...noteTabs, { key, path }]
-      if (!(await updateOpenNotes(next))) return
-      if (canReplace && currentTab) {
-        const nextStatuses = { ...tabStatuses }
-        delete nextStatuses[currentTab.key]
-        tabStatuses = nextStatuses
-        const nextOutlines = { ...tabOutlines }
-        delete nextOutlines[currentTab.key]
-        tabOutlines = nextOutlines
-      }
-      noteTabs = next
-      activeTabKey = key
-      if (!fromHistory) recordNavigation(path)
+      tabsLocked = true
+      try {
+        // Freeze the current editor before checking whether replacing its tab is safe.
+        await tick()
+        const currentIndex = !newTab && activeTabKey && activeTabKey !== settingsTabKey
+          ? noteTabs.findIndex((tab) => tab.key === activeTabKey)
+          : -1
+        const currentTab = currentIndex >= 0 ? noteTabs[currentIndex] : undefined
+        const currentEditor = currentTab ? editors[currentTab.key] : undefined
+        const currentStatus = currentTab ? (currentEditor?.closeStatus() ?? tabStatuses[currentTab.key]) : undefined
+        const canReplace = Boolean(
+          currentTab &&
+          !currentEditor?.hasUnsavedWork() &&
+          !currentStatus?.dirty &&
+          !currentStatus?.saving &&
+          !currentStatus?.conflict,
+        )
+        const next = canReplace && currentTab
+          ? noteTabs.map((tab, index) => (index === currentIndex ? { key, path } : tab))
+          : [...noteTabs, { key, path }]
+        if (!(await updateOpenNotes(next))) return
+        if (canReplace && currentTab) {
+          const nextStatuses = { ...tabStatuses }
+          delete nextStatuses[currentTab.key]
+          tabStatuses = nextStatuses
+          const nextOutlines = { ...tabOutlines }
+          delete nextOutlines[currentTab.key]
+          tabOutlines = nextOutlines
+        }
+        noteTabs = next
+        activeTabKey = key
+        if (historyIndex === undefined) recordNavigation(path)
+        else navIndex = historyIndex
+      } finally { tabsLocked = false }
       await checkRegisteredNotes()
       if (fragment) await editors[key]?.navigateToFragment(fragment)
     })
   }
 
   function activateNote(key: string) {
-    if (tabsLocked) return
-    const tab = noteTabs.find((item) => item.key === key)
-    if (!tab) return
-    activeTabKey = key
-    recordNavigation(tab.path)
+    void serializeTabAction(async () => {
+      if (tabsLocked) return
+      const tab = noteTabs.find((item) => item.key === key)
+      if (!tab) return
+      activeTabKey = key
+      recordNavigation(tab.path)
+    })
   }
 
   function navigateBack() {
     if (!canGoBack || tabsLocked) return
-    navIndex -= 1
-    const target = navHistory[navIndex]
-    if (target) void openNote(target, undefined, { fromHistory: true })
+    void openNote('', undefined, { historyDelta: -1 })
   }
 
   function navigateForward() {
     if (!canGoForward || tabsLocked) return
-    navIndex += 1
-    const target = navHistory[navIndex]
-    if (target) void openNote(target, undefined, { fromHistory: true })
+    void openNote('', undefined, { historyDelta: 1 })
   }
 
   function chooseBulkClose(choice: 'save' | 'discard' | 'cancel') {
@@ -587,7 +597,11 @@
           ? (next[Math.min(previousIndex, next.length - 1)]?.key ?? (settingsTabOpen ? settingsTabKey : null))
           : (previousActiveKey && (next.some((item) => item.key === previousActiveKey) || previousActiveKey === settingsTabKey) ? previousActiveKey : (next[Math.min(previousIndex, next.length - 1)]?.key ?? null))
         await checkRegisteredNotes()
-      } finally { tabsLocked = false }
+      } finally {
+        tabsLocked = false
+        const activeTab = noteTabs.find((item) => item.key === activeTabKey)
+        if (activeTab) recordNavigation(activeTab.path)
+      }
     })
   }
 
@@ -602,11 +616,14 @@
     if (tabsLocked) return
     settingsTabOpen = false
     if (activeTabKey === settingsTabKey) activeTabKey = noteTabs[0]?.key ?? null
+    const activeTab = noteTabs.find((item) => item.key === activeTabKey)
+    if (activeTab) recordNavigation(activeTab.path)
   }
 
-  async function setEditorPreference(key: keyof EditorPreferences, value: boolean) {
+  async function setEditorPreference(key: keyof EditorPreferences, input: HTMLInputElement) {
     const api = window.pywebview?.api
     if (!api || editorPreferenceSaving[key]) return
+    const value = input.checked
     editorPreferenceSaving = { ...editorPreferenceSaving, [key]: true }
     settingsMessage = ''
     try {
@@ -614,6 +631,7 @@
       editorPreferences = { ...editorPreferences, [key]: value }
     }
     catch (error) {
+      input.checked = editorPreferences[key]
       settingsMessage = 'Could not save editor settings.'
       console.error(error)
     } finally { editorPreferenceSaving = { ...editorPreferenceSaving, [key]: false } }
@@ -721,12 +739,13 @@
     appearanceSaving = true
     appearance = { ...appearance, ...patch }
     workspaceMessage = ''
+    settingsMessage = ''
     try {
       await api.set_workspace_appearance(id, patch)
     } catch (error) {
       if (id === workspaceId) {
         appearance = previous
-        workspaceMessage = 'Could not save appearance settings.'
+        settingsMessage = 'Could not save appearance settings.'
       }
       console.error(error)
     } finally { appearanceSaving = false }
@@ -775,6 +794,13 @@
         const plan = automaticLinkUpdate ? await planMoveLinks(api, id, source, destination) : null
         workspaceMessage = 'Moving and updating links...'
         const result = await api.commit_move(id, source, destination, plan?.snapshots ?? null, plan?.rewrites ?? [])
+        const sourceKey = notePathKey(source)
+        navHistory = navHistory.map((path) => {
+          const key = notePathKey(path)
+          return key === sourceKey || key.startsWith(`${sourceKey}/`)
+            ? `${result.destination}${path.slice(source.length)}`
+            : path
+        })
         for (const folder of expandedFolders) {
           if (folder !== source && !folder.startsWith(`${source}/`)) {
             try { await api.set_directory_visible(id, folder, false) } catch (error) { console.error(error) }
@@ -950,8 +976,9 @@
         <div class="settings-content">
           <strong>Quick settings</strong>
           <button class="text-button quick-settings-open" onclick={openSettingsTab}>Open Settings</button>
-          <label class="quick-setting"><input type="checkbox" checked={editorPreferences.autosave} disabled={!editorPreferencesLoaded || editorPreferenceSaving.autosave} onchange={(event) => setEditorPreference('autosave', (event.currentTarget as HTMLInputElement).checked)} /> Autosave</label>
-          <label class="quick-setting"><input type="checkbox" checked={editorPreferences.auto_reload} disabled={!editorPreferencesLoaded || editorPreferenceSaving.auto_reload} onchange={(event) => setEditorPreference('auto_reload', (event.currentTarget as HTMLInputElement).checked)} /> Auto-reload unchanged notes</label>
+          <label class="quick-setting"><input type="checkbox" checked={editorPreferences.autosave} disabled={!editorPreferencesLoaded || editorPreferenceSaving.autosave} onchange={(event) => setEditorPreference('autosave', event.currentTarget)} /> Autosave</label>
+          <label class="quick-setting"><input type="checkbox" checked={editorPreferences.auto_reload} disabled={!editorPreferencesLoaded || editorPreferenceSaving.auto_reload} onchange={(event) => setEditorPreference('auto_reload', event.currentTarget)} /> Auto-reload unchanged notes</label>
+          {#if settingsMessage}<p role="alert">{settingsMessage}</p>{/if}
         </div>
       </details>
     </nav>
@@ -1128,9 +1155,9 @@
                 {#if settingsMessage}<p class="settings-message" role="alert">{settingsMessage}</p>{/if}
                 <section class="settings-section">
                   <h2>Editor</h2>
-                  <label><input type="checkbox" checked={editorPreferences.autosave} disabled={!editorPreferencesLoaded || editorPreferenceSaving.autosave} onchange={(event) => setEditorPreference('autosave', (event.currentTarget as HTMLInputElement).checked)} /> Save changes automatically</label>
-                  <label><input type="checkbox" checked={editorPreferences.auto_reload} disabled={!editorPreferencesLoaded || editorPreferenceSaving.auto_reload} onchange={(event) => setEditorPreference('auto_reload', (event.currentTarget as HTMLInputElement).checked)} /> Reload notes when the disk version changes and there are no local edits</label>
-                  <label><input type="checkbox" checked={editorPreferences.reload_notice} disabled={!editorPreferencesLoaded || editorPreferenceSaving.reload_notice} onchange={(event) => setEditorPreference('reload_notice', (event.currentTarget as HTMLInputElement).checked)} /> Show a notice after reloading a changed note</label>
+                  <label><input type="checkbox" checked={editorPreferences.autosave} disabled={!editorPreferencesLoaded || editorPreferenceSaving.autosave} onchange={(event) => setEditorPreference('autosave', event.currentTarget)} /> Save changes automatically</label>
+                  <label><input type="checkbox" checked={editorPreferences.auto_reload} disabled={!editorPreferencesLoaded || editorPreferenceSaving.auto_reload} onchange={(event) => setEditorPreference('auto_reload', event.currentTarget)} /> Reload notes when the disk version changes and there are no local edits</label>
+                  <label><input type="checkbox" checked={editorPreferences.reload_notice} disabled={!editorPreferencesLoaded || editorPreferenceSaving.reload_notice} onchange={(event) => setEditorPreference('reload_notice', event.currentTarget)} /> Show a notice after reloading a changed note</label>
                 </section>
                 <section class="settings-section">
                   <h2>Appearance</h2>

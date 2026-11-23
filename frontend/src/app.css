@@ -136,7 +136,6 @@ a:focus-visible {
 }
 
 .menu-items,
-.header-actions,
 .connection-status {
   display: flex;
   align-items: center;
@@ -160,7 +159,6 @@ a:focus-visible {
 .menu-sidebar-toggle:hover { background: var(--bg-hover); color: var(--ink); }
 .menu-sidebar-toggle[aria-pressed='true'] { color: var(--accent); }
 .menu-sidebar-toggle svg { display: block; width: 17px; height: 17px; }
-.header-actions { flex: 0 0 auto; gap: 7px; margin-left: auto; }
 
 .connection-status {
   gap: 7px;
@@ -341,10 +339,6 @@ a:focus-visible {
 .settings-blocked-label textarea { width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 5px; background: var(--bg-paper); color: var(--ink); font-family: var(--font-mono); font-size: 12px; resize: vertical; }
 .settings-message { margin: 8px 0; color: var(--ink-muted); font-size: 11px; }
 .settings-connection-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
-.workspace-layout > .empty-state { grid-column: 3; grid-row: 1; }
-.workspace-layout.files-hidden > .empty-state { grid-column: 2; }
-.workspace-layout > .workspace-message { grid-column: 3; grid-row: 1; align-self: end; }
-.workspace-layout.files-hidden > .workspace-message { grid-column: 2; }
 
 .status-bar { flex: 0 0 24px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 10px; border-top: 1px solid var(--border); background: var(--bg-panel); color: var(--ink-muted); font-size: 10px; }
 .status-bar span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -388,26 +382,6 @@ a:focus-visible {
 .tree-heading { flex: 0 0 32px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 3px; }
 .tree-heading h2 { margin: 0; color: var(--ink-muted); font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
 .tree-actions { display: flex; align-items: center; gap: 2px; }
-
-.tree-options {
-  display: grid;
-  gap: 6px;
-  margin: 10px 2px 8px;
-  padding-bottom: 9px;
-  border-bottom: 1px solid var(--border);
-}
-
-.tree-options label { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 8px; color: var(--ink-muted); font-size: 11px; }
-.tree-options select {
-  min-width: 0;
-  max-width: 165px;
-  padding: 4px 22px 4px 7px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--bg-paper);
-  color: var(--ink);
-  font-size: 11px;
-}
 
 .tree-alert,
 .tree-status-message { margin: 4px 3px; color: var(--warn); font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
@@ -494,7 +468,6 @@ a:focus-visible {
 .note-breadcrumb { min-width: 0; overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .note-breadcrumb-dir { color: var(--ink-faint); font-weight: 400; }
 .note-breadcrumb-file { color: var(--ink-muted); font-weight: 500; }
-.note-toolbar > span { color: var(--ink-faint); font-size: 11px; }
 .note-toolbar > button:not(.icon-button) {
   padding: 5px 9px;
   border: 0;
@@ -516,21 +489,6 @@ a:focus-visible {
 .note-more-content button { padding: 7px; border: 0; background: transparent; color: var(--ink-muted); text-align: left; }
 .note-more-content button:disabled { opacity: 0.5; }
 
-.note-settings {
-  flex: 0 0 auto;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 16px;
-  padding: 7px 14px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-panel);
-}
-
-.note-settings label { display: inline-flex; align-items: center; gap: 5px; color: var(--ink-muted); font-size: 10.5px; cursor: pointer; }
-.note-settings input { margin: 0; accent-color: var(--accent); }
-
-.note-body-layout { display: flex; flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
 .note-scroll { flex: 1; min-width: 0; min-height: 0; overflow: auto; padding: 18px 22px; background: var(--bg-app); }
 .note-sheet {
   width: 100%;
@@ -660,7 +618,6 @@ a:focus-visible {
 .status-notice,
 .note-error,
 .note-conflict,
-.switch-prompt,
 .workspace-message {
   display: flex;
   flex-wrap: wrap;
@@ -717,7 +674,6 @@ a:focus-visible {
 @media (max-width: 720px) {
   .menu-bar { flex: 0 0 auto; min-height: 67px; flex-wrap: wrap; gap: 2px 6px; padding: 4px 7px; }
   .menu-items { order: 1; flex: 1 1 auto; }
-  .header-actions { order: 2; gap: 4px; }
   .connection-status { max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
   .appearance-group { min-width: 0; }
   .appearance-group button { min-height: 24px; padding: 3px 6px; font-size: 10px; }
@@ -734,19 +690,10 @@ a:focus-visible {
   .workspace-layout.files-hidden .document-host { grid-row: 1; }
   .workspace-layout > .note-outline { grid-column: 2; grid-row: 3; max-height: 190px; border-top: 1px solid var(--border); border-left: 0; }
   .workspace-layout.files-hidden > .note-outline { grid-column: 2; grid-row: 2; }
-  .workspace-layout.files-hidden .note-panel,
-  .workspace-layout.files-hidden > .empty-state { grid-column: 2; grid-row: 1; }
-  .workspace-layout:not(.files-hidden) > .empty-state { grid-column: 2; grid-row: 2; }
-  .workspace-layout > .workspace-message { grid-column: 2; grid-row: 2; }
-  .workspace-layout.files-hidden > .workspace-message { grid-column: 2; grid-row: 1; }
-  .tree-options { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin: 7px 2px 5px; padding-bottom: 6px; }
-  .tree-options label { gap: 4px; font-size: 10px; }
-  .tree-options select { max-width: 60%; padding: 3px 18px 3px 5px; font-size: 10px; }
   .tree-entry,
   .tree-row,
   .tree-status { height: 32px; }
   .note-toolbar { flex-basis: 40px; padding: 0 9px; gap: 6px; }
-  .note-toolbar strong { font-size: 11px; }
   .document-tabs { flex-basis: 34px; padding-right: 5px; padding-left: 5px; }
   .document-tab { max-width: 160px; padding-left: 5px; }
   .document-tab-select { min-height: 27px; font-size: 10px; }
@@ -755,9 +702,7 @@ a:focus-visible {
   .settings-tab-scroll { padding-right: 15px; padding-left: 15px; }
   .bulk-close-backdrop { padding: 10px; }
   .bulk-close-dialog { padding: 16px; }
-  .note-settings { gap: 6px 10px; padding: 6px 9px; }
-  .note-body-layout { flex-direction: column; overflow: auto; }
-  .note-scroll { flex: 1 0 320px; min-height: 320px; padding: 10px; }
+  .note-scroll { flex: 1 1 auto; min-height: 0; padding: 10px; }
   .note-sheet { min-height: calc(100% - 12px); padding: 22px 20px 30px; font-size: 15px; }
   :root[data-surface='seamless'] .note-sheet { padding: 18px 10px 26px; }
   .note-outline { flex: 0 0 auto; max-height: 190px; border-top: 1px solid var(--border); border-left: 0; }
