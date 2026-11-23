@@ -13,6 +13,9 @@
     | { kind: 'item'; path: string; item: FileTreeItem; depth: number }
     | { kind: 'status'; path: string; message: string; depth: number; error: boolean }
   type NoteSnapshot = { path: string; content: string; version: string }
+  type NoteTab = { key: string; path: string }
+  type EditorPreferences = { autosave: boolean; auto_reload: boolean; reload_notice: boolean }
+  type EditorStatus = { dirty: boolean; saving: boolean; conflict: boolean }
   type ThemeId = 'warm-charcoal' | 'warm-paper'
   type SurfaceMode = 'framed' | 'seamless'
   type FileIconId = 'file' | 'markdown' | 'image' | 'pdf' | 'code'
@@ -48,7 +51,7 @@
     media_url: (id: string) => Promise<string>
     open_external_link: (url: string) => Promise<void>
     save_note: (id: string, path: string, content: string, version: string) => Promise<NoteSnapshot>
-    set_active_note: (id: string, path: string) => Promise<void>
+    set_open_notes?: (id: string, paths: string[]) => Promise<void>
     finish_close: () => Promise<void>
   }
   declare global {
@@ -70,6 +73,8 @@
     surface_mode: 'framed',
     file_icons: { set: 'minimal', extensions: {} },
   }
+  const defaultEditorPreferences: EditorPreferences = { autosave: false, auto_reload: true, reload_notice: true }
+  const settingsTabKey = '__acornwiki_settings__'
   const imageExtensions = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg', '.avif']
   const codeExtensions = ['.json', '.yaml', '.yml', '.toml', '.py', '.ts', '.tsx', '.js', '.jsx', '.css', '.html', '.sh', '.sql']
 
@@ -80,6 +85,10 @@
   let workspaceMessage = $state('')
   let blockedExtensions = $state('')
   let blockedMessage = $state('')
+  let editorPreferences = $state<EditorPreferences>(defaultEditorPreferences)
+  let editorPreferencesLoaded = $state(false)
+  let editorPreferenceSaving = $state<Partial<Record<keyof EditorPreferences, boolean>>>({})
+  let settingsMessage = $state('')
   let loadingWorkspace = $state(false)
   let selectedWorkspace = $state<string | null>(null)
   let workspaceId = $state<string | null>(null)
@@ -88,9 +97,20 @@
   let settingsOpen = $state(false)
   let filePanelOpen = $state(true)
   let workspacePicker: HTMLDetailsElement | undefined = $state()
-  let settingsMenu: HTMLDetailsElement | undefined = $state()
-  let editor: NoteEditor | undefined = $state()
-  let selectedNote = $state<string | null>(null)
+  let noteTabs = $state<NoteTab[]>([])
+  let activeTabKey = $state<string | null>(null)
+  let settingsTabOpen = $state(false)
+  let tabStatuses = $state<Record<string, EditorStatus>>({})
+  let editors: Record<string, NoteEditor | undefined> = {}
+  let bulkClose = $state<{ paths: string[]; error: string; busy: boolean; cancelable: boolean } | null>(null)
+  let bulkCloseChoice: ((choice: 'save' | 'discard' | 'cancel') => void) | undefined
+  let bulkCancelRequested = false
+  let tabMutationQueue: Promise<void> = Promise.resolve()
+  let tabsLocked = $state(false)
+  let closeRequestActive = false
+  let selectedNote = $derived(noteTabs.find((tab) => tab.key === activeTabKey)?.path ?? null)
+  let settingsTabActive = $derived(activeTabKey === settingsTabKey)
+  let openTabs = $derived(noteTabs.length > 0 || settingsTabOpen)
   let latestRevision = -1
   let sortMode = $state<SortMode>('alphabetic')
   let directories = $state.raw<Record<string, DirectorySnapshot>>({})
@@ -98,7 +118,6 @@
   let creationFolder = $state('')
   let creating = $state(false)
   let moving = $state(false)
-  let editorMounted = $state(true)
   let automaticLinkUpdate = true
   let watcherError = $state<string | null>(null)
   let visibleTree = $derived(buildVisibleTree())
@@ -166,13 +185,17 @@
     let subscribedState: EventTarget | undefined
     function handleStateChange(event: Event) {
       const detail = (event as CustomEvent<{ key: string }>).detail
-      if (detail?.key === 'file_tree_revision') { void syncTree(); editor?.scheduleExternalCheck() }
-      if (detail?.key === 'note_revision') editor?.scheduleExternalCheck()
+      if (detail?.key === 'file_tree_revision') { void syncTree(); scheduleNoteChecks() }
+      if (detail?.key === 'note_revision') scheduleNoteChecks()
       if (detail?.key === 'close_request') void closeWindow()
     }
     async function closeWindow() {
-      if (moving) return
-      if (!editor || await editor.prepareClose()) await window.pywebview?.api?.finish_close()
+      if (moving || closeRequestActive || tabsLocked) return
+      closeRequestActive = true
+      try {
+        const closed = await serializeTabAction(async () => await closeAllTabsInMutation())
+        if (closed) await window.pywebview?.api?.finish_close()
+      } finally { closeRequestActive = false }
     }
     function updateBridgeStatus() {
       const webview = window.pywebview
@@ -185,13 +208,30 @@
         void syncTree()
       }
     }
-    function onFocus() { void refreshTree(null); editor?.scheduleExternalCheck() }
+    function onFocus() { void refreshTree(null); scheduleNoteChecks() }
+    function onKeydown(event: KeyboardEvent) {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 's') return
+      const instance = activeTabKey && activeTabKey !== settingsTabKey ? editors[activeTabKey] : undefined
+      if (!instance) return
+      event.preventDefault()
+      if (tabsLocked) return
+      void instance.save()
+    }
+    function beforeUnload(event: BeforeUnloadEvent) {
+      if (!noteTabs.some((tab) => editors[tab.key]?.hasUnsavedWork())) return
+      event.preventDefault()
+      event.returnValue = ''
+    }
     window.addEventListener('pywebviewready', updateBridgeStatus)
     window.addEventListener('focus', onFocus)
+    window.addEventListener('keydown', onKeydown)
+    window.addEventListener('beforeunload', beforeUnload)
     updateBridgeStatus()
     return () => {
       window.removeEventListener('pywebviewready', updateBridgeStatus)
       window.removeEventListener('focus', onFocus)
+      window.removeEventListener('keydown', onKeydown)
+      window.removeEventListener('beforeunload', beforeUnload)
       subscribedState?.removeEventListener('change', handleStateChange)
       for (const timer of refreshTimers.values()) clearTimeout(timer)
       refreshTimers.clear()
@@ -209,9 +249,214 @@
       const settings = await api.get_settings()
       workspaces = settings.workspaces
       blockedExtensions = (settings.blocked_extensions ?? []).join(', ')
+      editorPreferences = settings.editor ?? defaultEditorPreferences
+      editorPreferencesLoaded = true
       workspacesLoaded = true
     }
     catch (error) { workspaceMessage = 'Could not load workspaces.'; console.error(error) }
+  }
+
+  function serializeTabAction<T>(action: () => Promise<T>): Promise<T> {
+    const pending = tabMutationQueue.then(action, action)
+    tabMutationQueue = pending.then(() => undefined, () => undefined)
+    return pending
+  }
+
+  function notePathKey(path: string): string {
+    const normalized = path.replace(/\\/g, '/').replace(/\/{2,}/g, '/').replace(/^(?:\.\/)+/, '')
+    const windows = /^win/i.test(navigator.platform || '') || /windows/i.test(navigator.userAgent)
+    return windows ? normalized.toLowerCase() : normalized
+  }
+
+  async function updateOpenNotes(tabs: NoteTab[], id = workspaceId): Promise<boolean> {
+    const api = window.pywebview?.api
+    if (!api || !id || !api.set_open_notes) return true
+    try {
+      await api.set_open_notes(id, tabs.map((tab) => tab.path))
+      return true
+    } catch (error) {
+      workspaceMessage = 'Could not update the open note list.'
+      console.error(error)
+      return false
+    }
+  }
+
+  function updateTabStatus(key: string, status: EditorStatus) {
+    tabStatuses = { ...tabStatuses, [key]: status }
+  }
+
+  async function checkRegisteredNotes() {
+    await tick()
+    await Promise.allSettled(noteTabs.map(async (tab) => {
+      const instance = editors[tab.key]
+      if (!instance) return
+      await instance.waitForLoad()
+      await instance.checkExternalNow()
+    }))
+  }
+
+  function scheduleNoteChecks() {
+    for (const tab of noteTabs) editors[tab.key]?.scheduleExternalCheck()
+  }
+
+  async function openNote(path: string, fragment?: string) {
+    const requestedWorkspaceId = workspaceId
+    return serializeTabAction(async () => {
+      if (!requestedWorkspaceId || requestedWorkspaceId !== workspaceId || tabsLocked) return
+      const key = notePathKey(path)
+      const existing = noteTabs.find((tab) => tab.key === key)
+      if (existing) {
+        activeTabKey = existing.key
+        if (fragment) {
+          await tick()
+          await editors[existing.key]?.navigateToFragment(fragment)
+        }
+        return
+      }
+      const next = [...noteTabs, { key, path }]
+      if (!(await updateOpenNotes(next))) return
+      noteTabs = next
+      activeTabKey = key
+      await checkRegisteredNotes()
+      if (fragment) await editors[key]?.navigateToFragment(fragment)
+    })
+  }
+
+  function activateNote(key: string) {
+    if (!tabsLocked && noteTabs.some((tab) => tab.key === key)) activeTabKey = key
+  }
+
+  function chooseBulkClose(choice: 'save' | 'discard' | 'cancel') {
+    if (choice === 'cancel' && bulkClose && !bulkClose.cancelable) return
+    if (bulkClose?.busy && choice !== 'cancel') return
+    const resolve = bulkCloseChoice
+    bulkCloseChoice = undefined
+    if (choice === 'cancel' && !resolve) bulkCancelRequested = true
+    resolve?.(choice)
+  }
+
+  async function closeAllTabsInMutation(): Promise<boolean> {
+    const id = workspaceId
+    if (!id) return true
+    if (noteTabs.length === 0) return await updateOpenNotes([], id)
+    tabsLocked = true
+    bulkCancelRequested = false
+    const inFlight = noteTabs.filter((tab) => editors[tab.key]?.closeStatus().saving)
+    bulkClose = inFlight.length ? { paths: [], error: '', busy: true, cancelable: true } : null
+    try {
+      await Promise.all(inFlight.map((tab) => editors[tab.key]?.waitForSave()))
+      if (bulkCancelRequested) return false
+      await tick()
+      const dirtyTabs = noteTabs.filter((tab) => {
+        const status = editors[tab.key]?.closeStatus() ?? tabStatuses[tab.key]
+        return status?.dirty || status?.saving
+      })
+      if (dirtyTabs.length) {
+        bulkClose = { paths: dirtyTabs.map((tab) => tab.path), error: '', busy: false, cancelable: true }
+        let choice = await new Promise<'save' | 'discard' | 'cancel'>((resolve) => { bulkCloseChoice = resolve })
+        while (choice !== 'cancel') {
+          bulkClose = { paths: dirtyTabs.map((tab) => tab.path), error: '', busy: true, cancelable: true }
+          if (choice === 'save') {
+            const results = await Promise.all(noteTabs.map(async (tab) => {
+              const instance = editors[tab.key]
+              const status = instance?.closeStatus() ?? tabStatuses[tab.key]
+              if (!instance || (!status?.dirty && !status?.saving)) return true
+              return instance.save()
+            }))
+            if (bulkCancelRequested) return false
+            await tick()
+            if (bulkCancelRequested) return false
+            const unresolved = noteTabs.filter((tab) => {
+              const status = editors[tab.key]?.closeStatus() ?? tabStatuses[tab.key]
+              return status?.dirty || status?.saving
+            })
+            if (results.every(Boolean) && unresolved.length === 0) break
+            bulkClose = {
+              paths: unresolved.length ? unresolved.map((tab) => tab.path) : dirtyTabs.map((tab) => tab.path),
+              error: 'Some notes could not be saved. Resolve their conflicts or discard all changes to close.',
+              busy: false,
+              cancelable: true,
+            }
+            choice = await new Promise<'save' | 'discard' | 'cancel'>((resolve) => { bulkCloseChoice = resolve })
+            continue
+          }
+          await Promise.all(noteTabs.map((tab) => editors[tab.key]?.discardForClose()))
+          if (bulkCancelRequested) return false
+          break
+        }
+        if (choice === 'cancel') return false
+      } else bulkClose = null
+      if (bulkClose) bulkClose = { ...bulkClose, busy: true, cancelable: false }
+      if (!(await updateOpenNotes([], id))) {
+        bulkClose = { paths: noteTabs.map((tab) => tab.path), error: 'The open note list could not be cleared. Notes are still open.', busy: false, cancelable: true }
+        return false
+      }
+      noteTabs = []
+      tabStatuses = {}
+      activeTabKey = settingsTabOpen ? settingsTabKey : null
+      return true
+    } finally {
+      bulkCloseChoice = undefined
+      bulkCancelRequested = false
+      bulkClose = null
+      tabsLocked = false
+    }
+  }
+
+  async function closeNoteTab(key: string) {
+    const requestedWorkspaceId = workspaceId
+    return serializeTabAction(async () => {
+      if (tabsLocked || requestedWorkspaceId !== workspaceId) return
+      const tab = noteTabs.find((item) => item.key === key)
+      const instance = editors[key]
+      if (!tab || !instance) return
+      tabsLocked = true
+      const previousActiveKey = activeTabKey
+      const previousIndex = noteTabs.findIndex((item) => item.key === key)
+      activeTabKey = key
+      await tick()
+      try {
+        if (!(await instance.prepareClose())) return
+        const next = noteTabs.filter((item) => item.key !== key)
+        if (!(await updateOpenNotes(next))) { instance.resumeAfterFailedClose(); return }
+        noteTabs = next
+        const nextStatuses = { ...tabStatuses }
+        delete nextStatuses[key]
+        tabStatuses = nextStatuses
+        activeTabKey = previousActiveKey === key
+          ? (next[Math.min(previousIndex, next.length - 1)]?.key ?? (settingsTabOpen ? settingsTabKey : null))
+          : (previousActiveKey && (next.some((item) => item.key === previousActiveKey) || previousActiveKey === settingsTabKey) ? previousActiveKey : (next[Math.min(previousIndex, next.length - 1)]?.key ?? null))
+        await checkRegisteredNotes()
+      } finally { tabsLocked = false }
+    })
+  }
+
+  function openSettingsTab() {
+    if (tabsLocked) return
+    settingsTabOpen = true
+    activeTabKey = settingsTabKey
+    settingsOpen = false
+  }
+
+  function closeSettingsTab() {
+    if (tabsLocked) return
+    settingsTabOpen = false
+    if (activeTabKey === settingsTabKey) activeTabKey = noteTabs[0]?.key ?? null
+  }
+
+  async function setEditorPreference(key: keyof EditorPreferences, value: boolean) {
+    const api = window.pywebview?.api
+    if (!api || editorPreferenceSaving[key]) return
+    editorPreferenceSaving = { ...editorPreferenceSaving, [key]: true }
+    settingsMessage = ''
+    try {
+      await api.set_editor_preference(key, value)
+      editorPreferences = { ...editorPreferences, [key]: value }
+    }
+    catch (error) {
+      settingsMessage = 'Could not save editor settings.'
+      console.error(error)
+    } finally { editorPreferenceSaving = { ...editorPreferenceSaving, [key]: false } }
   }
   async function saveBlockedExtensions() {
     try {
@@ -226,46 +471,40 @@
     catch (error) { workspaceMessage = 'Could not open the file.'; console.error(error) }
   }
   async function selectWorkspace(path: string) {
-    const api = window.pywebview?.api
-    if (!api) return
-    if (appearanceSaving) return
-    if (editor && !(await editor.prepareClose())) return
-    if (workspacePicker) workspacePicker.open = false
-    loadingWorkspace = true
-    workspaceMessage = ''
-    selectedWorkspace = null
-    selectedNote = null
-    workspaceId = null
-    appearance = { ...defaultAppearance, file_icons: { set: 'minimal', extensions: {} } }
-    latestRevision = -1
-    directories = {}
-    expandedFolders = []
-    creationFolder = ''
-    scrollTop = 0
-    if (viewport) viewport.scrollTop = 0
-    sortMode = 'alphabetic'
-    try {
-      const preferences = await api.get_workspace_settings(path)
-      const snapshot = await api.open_workspace(path)
-      workspaceId = snapshot.workspace_id
-      selectedWorkspace = path
-      automaticLinkUpdate = preferences.automatic_link_update !== false
-      appearance = normalizeAppearance(preferences.appearance)
-      applySnapshot(snapshot)
-      await syncTree()
-    } catch (error) {
-      workspaceMessage = `Could not open workspace: ${path}. Check the folder and its settings.`
-      console.error(error)
-    } finally { loadingWorkspace = false }
+    return serializeTabAction(async () => {
+      const api = window.pywebview?.api
+      if (!api || appearanceSaving) return
+      if (!(await closeAllTabsInMutation())) return
+      if (workspacePicker) workspacePicker.open = false
+      loadingWorkspace = true
+      workspaceMessage = ''
+      selectedWorkspace = null
+      workspaceId = null
+      appearance = { ...defaultAppearance, file_icons: { set: 'minimal', extensions: {} } }
+      latestRevision = -1
+      directories = {}
+      expandedFolders = []
+      creationFolder = ''
+      scrollTop = 0
+      if (viewport) viewport.scrollTop = 0
+      sortMode = 'alphabetic'
+      try {
+        const preferences = await api.get_workspace_settings(path)
+        const snapshot = await api.open_workspace(path)
+        workspaceId = snapshot.workspace_id
+        selectedWorkspace = path
+        automaticLinkUpdate = preferences.automatic_link_update !== false
+        appearance = normalizeAppearance(preferences.appearance)
+        applySnapshot(snapshot)
+        await syncTree()
+      } catch (error) {
+        workspaceMessage = `Could not open workspace: ${path}. Check the folder and its settings.`
+        console.error(error)
+      } finally { loadingWorkspace = false }
+    })
   }
   function toggleFilePanel() {
     filePanelOpen = !filePanelOpen
-  }
-  async function toggleSettings() {
-    settingsOpen = !settingsOpen
-    if (!settingsOpen) return
-    await tick()
-    settingsMenu?.querySelector<HTMLElement>('summary')?.focus()
   }
   function normalizeAppearance(value: WorkspaceAppearance): AppearanceState {
     if (value.theme !== 'warm-charcoal' && value.theme !== 'warm-paper') {
@@ -352,41 +591,37 @@
     } finally { creating = false }
   }
   async function moveEntry(source: string) {
-    const api = window.pywebview?.api
-    const id = workspaceId
-    if (!api || !id || moving) return
-    const destination = window.prompt('Move or rename to (workspace-relative path):', source)
-    if (destination === null || destination === source) return
-    moving = true
-    workspaceMessage = ''
-    try {
-      if (editor && !(await editor.prepareClose())) return
-      // Close the approved editor before planning so edits cannot race with the move.
-      editorMounted = false
-      selectedNote = null
-      await tick()
-      workspaceMessage = 'Preparing link updates...'
-      const plan = automaticLinkUpdate ? await planMoveLinks(api, id, source, destination) : null
-      workspaceMessage = 'Moving and updating links...'
-      const result = await api.commit_move(id, source, destination, plan?.snapshots ?? null, plan?.rewrites ?? [])
-      for (const folder of expandedFolders) {
-        if (folder !== source && !folder.startsWith(`${source}/`)) {
-          try { await api.set_directory_visible(id, folder, false) } catch (error) { console.error(error) }
+    const requestedWorkspaceId = workspaceId
+    return serializeTabAction(async () => {
+      const api = window.pywebview?.api
+      const id = requestedWorkspaceId
+      if (!api || !id || id !== workspaceId || moving) return
+      const destination = window.prompt('Move or rename to (workspace-relative path):', source)
+      if (destination === null || destination === source) return
+      moving = true
+      workspaceMessage = ''
+      try {
+        if (!(await closeAllTabsInMutation())) return
+        workspaceMessage = 'Preparing link updates...'
+        const plan = automaticLinkUpdate ? await planMoveLinks(api, id, source, destination) : null
+        workspaceMessage = 'Moving and updating links...'
+        const result = await api.commit_move(id, source, destination, plan?.snapshots ?? null, plan?.rewrites ?? [])
+        for (const folder of expandedFolders) {
+          if (folder !== source && !folder.startsWith(`${source}/`)) {
+            try { await api.set_directory_visible(id, folder, false) } catch (error) { console.error(error) }
+          }
         }
-      }
-      expandedFolders = []
-      creationFolder = ''
-      await syncTree()
-      workspaceMessage = result.failures.length
-        ? `Moved, but some notes could not be updated: ${result.failures.map(item => `${item.path}: ${item.error}`).join('; ')}`
-        : `Moved. Updated links in ${result.updated.length} notes.`
-    } catch (error) {
-      workspaceMessage = `Could not complete the move: ${String(error)}`
-      console.error(error)
-    } finally {
-      editorMounted = true
-      moving = false
-    }
+        expandedFolders = []
+        creationFolder = ''
+        await syncTree()
+        workspaceMessage = result.failures.length
+          ? `Moved, but some notes could not be updated: ${result.failures.map(item => `${item.path}: ${item.error}`).join('; ')}`
+          : `Moved. Updated links in ${result.updated.length} notes.`
+      } catch (error) {
+        workspaceMessage = `Could not complete the move: ${String(error)}`
+        console.error(error)
+      } finally { moving = false }
+    })
   }
   async function changeSortMode(event: Event) {
     const target = event.currentTarget
@@ -481,16 +716,6 @@
     <div class="header-actions">
       <p class="connection-status" aria-live="polite"><span class="connection-dot" class:connected={ready}></span>{message}</p>
       <button class="icon-button" onclick={ping} disabled={!ready} aria-label="Check connection" title="Check connection"><Icon name="refresh" /></button>
-      <details bind:open={settingsOpen} bind:this={settingsMenu} class="settings-menu">
-        <summary>Settings</summary>
-        <div class="settings-content">
-          <strong>Blocked file extensions</strong>
-          <p>Files with these extensions are shown in the tree but cannot be opened directly.</p>
-          <label>Extensions <textarea bind:value={blockedExtensions} rows="3"></textarea></label>
-          <button class="text-button" onclick={saveBlockedExtensions}>Save extensions</button>
-          {#if blockedMessage}<p role="status">{blockedMessage}</p>{/if}
-        </div>
-      </details>
     </div>
   </header>
 
@@ -500,7 +725,15 @@
       <button class="activity-button" disabled aria-label="Graph view" title="Graph view is not available yet"><Icon name="network" /></button>
       <button class="activity-button" disabled aria-label="Command palette" title="Command palette is not available yet"><Icon name="terminal" /></button>
       <div class="activity-spacer"></div>
-      <button class="activity-button" onclick={toggleSettings} aria-label="Settings" aria-expanded={settingsOpen} title="Settings"><Icon name="settings" /></button>
+      <details bind:open={settingsOpen} class="settings-menu">
+        <summary class="activity-button" aria-label="Settings" title="Settings"><Icon name="settings" /></summary>
+        <div class="settings-content">
+          <strong>Quick settings</strong>
+          <button class="text-button quick-settings-open" onclick={openSettingsTab}>Open Settings</button>
+          <label class="quick-setting"><input type="checkbox" checked={editorPreferences.autosave} disabled={!editorPreferencesLoaded || editorPreferenceSaving.autosave} onchange={(event) => setEditorPreference('autosave', (event.currentTarget as HTMLInputElement).checked)} /> Autosave</label>
+          <label class="quick-setting"><input type="checkbox" checked={editorPreferences.auto_reload} disabled={!editorPreferencesLoaded || editorPreferenceSaving.auto_reload} onchange={(event) => setEditorPreference('auto_reload', (event.currentTarget as HTMLInputElement).checked)} /> Auto-reload unchanged notes</label>
+        </div>
+      </details>
     </nav>
 
     {#if filePanelOpen}
@@ -536,7 +769,7 @@
                           <span class="tree-label" title={row.item.name}>{row.item.name}</span>
                         </button>
                       {:else if row.path.toLowerCase().endsWith('.md')}
-                        <button class="tree-file tree-note" class:selected={selectedNote === row.path} aria-current={selectedNote === row.path ? 'true' : undefined} title={row.item.name} onclick={() => editor?.open(row.path)} onkeydown={handleTreeKeydown}>
+                        <button class="tree-file tree-note" class:selected={notePathKey(row.path) === activeTabKey} aria-current={notePathKey(row.path) === activeTabKey ? 'true' : undefined} title={row.item.name} onclick={() => openNote(row.path)} onkeydown={handleTreeKeydown}>
                           <Icon name={fileIconFor(row.item.name)} class="tree-icon note-icon" />
                           <span class="tree-label">{row.item.name}</span>
                         </button>
@@ -576,21 +809,109 @@
       </aside>
     {/if}
 
-    {#if workspaceId && editorMounted}
-      <NoteEditor bind:this={editor} bind:selectedNote {workspaceId} {workspaceMessage} />
-    {:else if selectedWorkspace}
-      {#if workspaceMessage}<p class="workspace-message" role="alert">{workspaceMessage}</p>
-      {:else}<section class="empty-state"><h2>No note selected</h2><p>Choose a Markdown file from the workspace tree.</p></section>{/if}
-    {:else}
-      <section class="empty-state" aria-live="polite">
-        {#if workspaceMessage}<p class="workspace-message" role="alert">{workspaceMessage}</p>{/if}
-        <h2>Select a workspace</h2>
-        <p>Choose a workspace from the file panel.</p>
-      </section>
-    {/if}
+    <section class="document-host" aria-label="Open documents">
+      {#if openTabs}
+        <div class="document-tabs" role="tablist" aria-label="Open tabs">
+          {#each noteTabs as tab (tab.key)}
+            {@const tabName = tab.path.split(/[\\/]/).pop() ?? tab.path}
+            <div class="document-tab" class:active={activeTabKey === tab.key}>
+              <button class="document-tab-select" role="tab" aria-selected={activeTabKey === tab.key} title={tab.path} disabled={tabsLocked} onclick={() => activateNote(tab.key)}>
+                <span class="document-tab-title">{tabName}</span>
+                {#if tabStatuses[tab.key]?.dirty}<span class="tab-dirty-indicator" aria-label="Unsaved changes">●</span>{/if}
+              </button>
+              <button class="document-tab-close" aria-label={`Close ${tabName}`} title={`Close ${tab.path}`} disabled={tabsLocked} onclick={() => closeNoteTab(tab.key)}><span aria-hidden="true">×</span></button>
+            </div>
+          {/each}
+          {#if settingsTabOpen}
+            <div class="document-tab settings-document-tab" class:active={settingsTabActive}>
+              <button class="document-tab-select" role="tab" aria-selected={settingsTabActive} disabled={tabsLocked} onclick={openSettingsTab}>Settings</button>
+              <button class="document-tab-close" aria-label="Close Settings" title="Close Settings" disabled={tabsLocked} onclick={closeSettingsTab}><span aria-hidden="true">×</span></button>
+            </div>
+          {/if}
+        </div>
+        <div class="document-host-body" inert={Boolean(bulkClose)}>
+          {#each noteTabs as tab (tab.key)}
+            <NoteEditor
+              bind:this={editors[tab.key]}
+              tabKey={tab.key}
+              notePath={tab.path}
+              active={activeTabKey === tab.key}
+              freezeEditors={tabsLocked}
+              workspaceId={workspaceId ?? ''}
+              {editorPreferences}
+              {workspaceMessage}
+              onOpenNote={openNote}
+              onStatusChange={updateTabStatus}
+            />
+          {/each}
+          {#if settingsTabOpen}
+            <section class="settings-tab" class:inactive={!settingsTabActive} aria-label="Settings" aria-hidden={!settingsTabActive} inert={!settingsTabActive}>
+              <header class="settings-tab-heading"><h1>Settings</h1><p>Application and workspace preferences</p></header>
+              <div class="settings-tab-scroll">
+                {#if settingsMessage}<p class="settings-message" role="alert">{settingsMessage}</p>{/if}
+                <section class="settings-section">
+                  <h2>Editor</h2>
+                  <label><input type="checkbox" checked={editorPreferences.autosave} disabled={!editorPreferencesLoaded || editorPreferenceSaving.autosave} onchange={(event) => setEditorPreference('autosave', (event.currentTarget as HTMLInputElement).checked)} /> Save changes automatically</label>
+                  <label><input type="checkbox" checked={editorPreferences.auto_reload} disabled={!editorPreferencesLoaded || editorPreferenceSaving.auto_reload} onchange={(event) => setEditorPreference('auto_reload', (event.currentTarget as HTMLInputElement).checked)} /> Reload notes when the disk version changes and there are no local edits</label>
+                  <label><input type="checkbox" checked={editorPreferences.reload_notice} disabled={!editorPreferencesLoaded || editorPreferenceSaving.reload_notice} onchange={(event) => setEditorPreference('reload_notice', (event.currentTarget as HTMLInputElement).checked)} /> Show a notice after reloading a changed note</label>
+                </section>
+                <section class="settings-section">
+                  <h2>Appearance</h2>
+                  <div class="settings-appearance-row"><span>Theme</span><div class="appearance-group" role="group" aria-label="Theme">
+                    <button class:active={appearance.theme === 'warm-charcoal'} aria-pressed={appearance.theme === 'warm-charcoal'} disabled={!workspaceId || appearanceSaving} onclick={() => setAppearance({ theme: 'warm-charcoal' })}>Warm Charcoal</button>
+                    <button class:active={appearance.theme === 'warm-paper'} aria-pressed={appearance.theme === 'warm-paper'} disabled={!workspaceId || appearanceSaving} onclick={() => setAppearance({ theme: 'warm-paper' })}>Warm Paper</button>
+                  </div></div>
+                  <div class="settings-appearance-row"><span>Document surface</span><div class="appearance-group surface-group" role="group" aria-label="Document surface">
+                    <button class:active={appearance.surface_mode === 'framed'} aria-pressed={appearance.surface_mode === 'framed'} disabled={!workspaceId || appearanceSaving} onclick={() => setAppearance({ surface_mode: 'framed' })}>Framed</button>
+                    <button class:active={appearance.surface_mode === 'seamless'} aria-pressed={appearance.surface_mode === 'seamless'} disabled={!workspaceId || appearanceSaving} onclick={() => setAppearance({ surface_mode: 'seamless' })}>Seamless</button>
+                  </div></div>
+                </section>
+                <section class="settings-section">
+                  <h2>File access</h2>
+                  <p>Extensions listed here stay visible in the file tree but cannot be opened directly.</p>
+                  <label class="settings-blocked-label">Blocked extensions <textarea bind:value={blockedExtensions} rows="4" placeholder=".exe, .bat"></textarea></label>
+                  <button class="text-button" onclick={saveBlockedExtensions}>Save extensions</button>
+                  {#if blockedMessage}<p role="status" class="settings-message">{blockedMessage}</p>{/if}
+                </section>
+              </div>
+            </section>
+          {/if}
+        </div>
+      {:else if workspaceId}
+        <section class="empty-state"><h2>No note selected</h2><p>Choose a Markdown file from the workspace tree.</p>{#if workspaceMessage}<p class="workspace-message" role="alert">{workspaceMessage}</p>{/if}</section>
+      {:else if selectedWorkspace}
+        <section class="empty-state"><h2>No note selected</h2><p>Choose a workspace to see its files.</p>{#if workspaceMessage}<p class="workspace-message" role="alert">{workspaceMessage}</p>{/if}</section>
+      {:else}
+        <section class="empty-state" aria-live="polite">
+          {#if workspaceMessage}<p class="workspace-message" role="alert">{workspaceMessage}</p>{/if}
+          <h2>Select a workspace</h2><p>Choose a workspace from the file panel.</p>
+        </section>
+      {/if}
+    </section>
   </div>
   <footer class="status-bar">
     <span>{selectedWorkspace ?? 'No workspace selected'}</span>
     <span>{selectedNote ?? 'No note open'} · {appearance.theme === 'warm-paper' ? 'Warm Paper' : 'Warm Charcoal'} · {appearance.surface_mode === 'seamless' ? 'Seamless' : 'Framed'}</span>
   </footer>
+  {#if bulkClose}
+    <div class="bulk-close-backdrop">
+      <div class="bulk-close-dialog" role="alertdialog" aria-modal="true" aria-labelledby="bulk-close-title" aria-describedby="bulk-close-description">
+        <h2 id="bulk-close-title">Close all open notes?</h2>
+        <p id="bulk-close-description">Choose what to do with unsaved edits before the tabs close.</p>
+        {#if bulkClose.paths.length}
+          <ul class="bulk-close-list">{#each bulkClose.paths as path}<li>{path}</li>{/each}</ul>
+        {:else if bulkClose.busy}
+          <p class="bulk-close-wait">Finishing a save already in progress…</p>
+        {/if}
+        {#if bulkClose.error}<p class="bulk-close-error" role="alert">{bulkClose.error}</p>{/if}
+        {#if !bulkClose.cancelable}<p class="bulk-close-wait" aria-live="polite">Closing note tabs…</p>
+        {:else if bulkClose.busy && bulkClose.paths.length}<p class="bulk-close-wait" aria-live="polite">Saving open notes…</p>{/if}
+        <div class="bulk-close-actions">
+          <button class="text-button" disabled={!bulkClose.cancelable} onclick={() => chooseBulkClose('cancel')}>Cancel</button>
+          <button class="text-button" disabled={bulkClose.busy || !bulkClose.paths.length} onclick={() => chooseBulkClose('discard')}>Discard all</button>
+          <button class="primary-button" disabled={bulkClose.busy || !bulkClose.paths.length} onclick={() => chooseBulkClose('save')}>Save all</button>
+        </div>
+      </div>
+    </div>
+  {/if}
 </main>

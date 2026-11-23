@@ -70,6 +70,8 @@ class Bridge:
         self._signal_lock = threading.Lock()
         self._tree_pending = False
         self._note_pending = False
+        self._open_notes: set[str] = set()
+        self._open_notes_registered = False
         self._active_note: str | None = None
         self._stopped = False
         self._allow_close = False
@@ -126,7 +128,13 @@ class Bridge:
 
     def _note_changed(self, path: Path) -> None:
         # Compare normalized names without opening every changed file.
-        if os.path.normcase(os.path.abspath(path)) != self._active_note:
+        changed_note = os.path.normcase(os.path.abspath(path))
+        watched = (
+            changed_note in self._open_notes
+            if self._open_notes_registered
+            else changed_note == self._active_note
+        )
+        if not watched:
             return
         with self._signal_lock:
             self._note_pending = True
@@ -174,6 +182,8 @@ class Bridge:
             if self._tree is not None:
                 self._tree.close()
                 self._tree = None
+            self._open_notes.clear()
+            self._open_notes_registered = False
             self._active_note = None
             self._tree = FileTree(Path(workspace_root), self._tree_changed, self._note_changed)
             self._tree.set_visible("", True)
@@ -414,10 +424,29 @@ class Bridge:
             return root / path
 
     def set_active_note(self, workspace_id: str, path: str) -> None:
-        """Watch the note only after the frontend accepts its open result."""
+        """Remember the active note for compatibility with older frontends."""
         with self._lock:
             root = self._require_tree(workspace_id).root
-            self._active_note = os.path.normcase(os.path.abspath(note_path(root, path)))
+            self._active_note = os.path.normcase(
+                os.path.abspath(note_path(root, path))
+            )
+
+    def set_open_notes(self, workspace_id: str, paths: list[str]) -> None:
+        """Replace the set of open Markdown tabs watched for external changes."""
+        if not isinstance(paths, list) or any(
+            not isinstance(path, str) for path in paths
+        ):
+            raise ValueError("Expected a list of workspace-relative note paths")
+        with self._lock:
+            root = self._require_tree(workspace_id).root
+            open_notes = {
+                os.path.normcase(os.path.abspath(note_path(root, path)))
+                for path in paths
+            }
+            self._open_notes = open_notes
+            self._open_notes_registered = True
+            if self._active_note not in open_notes:
+                self._active_note = None
 
     def save_note(
         self, workspace_id: str, path: str, content: str, version: str
@@ -451,6 +480,8 @@ class Bridge:
         with self._lock:
             tree = self._require_tree(workspace_id)
             self._tree = None
+            self._open_notes.clear()
+            self._open_notes_registered = False
             self._active_note = None
             tree.close()
 
@@ -458,6 +489,9 @@ class Bridge:
         with self._lock:
             tree = self._tree
             self._tree = None
+            self._open_notes.clear()
+            self._open_notes_registered = False
+            self._active_note = None
             if tree is not None:
                 tree.close()
         self._stopped = True

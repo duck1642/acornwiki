@@ -1,29 +1,46 @@
 <script lang="ts">
-  import { onMount, tick } from 'svelte'
-  import { EditorState } from '@codemirror/state'
-  import { EditorView, keymap } from '@codemirror/view'
+  import { onMount, tick, untrack } from 'svelte'
+  import { Compartment, EditorState } from '@codemirror/state'
+  import { EditorView } from '@codemirror/view'
   import { basicSetup } from 'codemirror'
   import { markdown } from '@codemirror/lang-markdown'
   import { marked } from 'marked'
   import DOMPurify from 'dompurify'
   import { openWorkspaceFile } from './fileActions'
 
-  let { workspaceId, selectedNote = $bindable(null), workspaceMessage = '' }: {
+  type EditorPreferences = { autosave: boolean; auto_reload: boolean; reload_notice: boolean }
+  type EditorStatus = { dirty: boolean; saving: boolean; conflict: boolean }
+  let {
+    workspaceId,
+    tabKey,
+    notePath,
+    active,
+    freezeEditors = false,
+    editorPreferences,
+    onOpenNote,
+    onStatusChange,
+    workspaceMessage = '',
+  }: {
     workspaceId: string
-    selectedNote: string | null
+    tabKey: string
+    notePath: string
+    active: boolean
+    freezeEditors?: boolean
+    editorPreferences: EditorPreferences
+    onOpenNote: (path: string, fragment?: string) => void | Promise<void>
+    onStatusChange: (key: string, status: EditorStatus) => void
     workspaceMessage?: string
   } = $props()
   let host: HTMLDivElement
+  let panel: HTMLElement
   let view: EditorView
+  const editableCompartment = new Compartment()
+  const readOnlyCompartment = new Compartment()
   let path = $state<string | null>(null)
   let text = $state('')
   let savedText = $state('')
   let version = $state('')
   let mode = $state<'source' | 'read'>('source')
-  let autosave = $state(false)
-  let autoReload = $state(true)
-  let showReloadNotice = $state(true)
-  let settingsLoaded = $state(false)
   let message = $state('')
   let error = $state('')
   let conflict = $state(false)
@@ -32,6 +49,8 @@
   let diskText = $state('')
   let saving = $state(false)
   let opening = false
+  let disposed = false
+  let loadingPromise: Promise<void> = Promise.resolve()
   let prompt = $state(false)
   let chooseClose: ((choice: 'save' | 'discard' | 'cancel') => void) | undefined
   let operation = 0
@@ -54,6 +73,28 @@
   let filteredOutline = $derived(filterOutline(outlineTree, outlineFilter.trim().toLowerCase()))
   let expandableOutlineIds = $derived(collectExpandableIds(outlineTree))
   let allOutlineExpanded = $derived(expandableOutlineIds.length > 0 && expandableOutlineIds.every((id) => expandedOutlineIds.includes(id)))
+
+  $effect(() => {
+    const key = tabKey
+    const status = { dirty, saving, conflict }
+    untrack(() => onStatusChange(key, status))
+  })
+
+  $effect(() => {
+    const canAutoSave = editorPreferences.autosave && !prompt && !freezeEditors && !conflict && Boolean(path) && dirty
+    if (!canAutoSave) clearTimeout(saveTimer)
+    else scheduleSave()
+  })
+
+  $effect(() => {
+    const readOnly = prompt || freezeEditors
+    const currentView = view
+    if (!currentView) return
+    currentView.dispatch({ effects: [
+      editableCompartment.reconfigure(EditorView.editable.of(!readOnly)),
+      readOnlyCompartment.reconfigure(EditorState.readOnly.of(readOnly)),
+    ] })
+  })
 
   $effect(() => {
     if (mode !== 'read') return
@@ -122,7 +163,14 @@
 
   function jumpToHeading(event: MouseEvent, id: string) {
     event.preventDefault()
-    document.querySelector('.note-read')?.querySelector(`#${CSS.escape(id)}`)?.scrollIntoView({ block: 'start' })
+    panel.querySelector('.note-read')?.querySelector(`#${CSS.escape(id)}`)?.scrollIntoView({ block: 'start' })
+  }
+
+  export async function navigateToFragment(fragment: string) {
+    if (!fragment) return
+    mode = 'read'
+    await tick()
+    panel.querySelector('.note-read')?.querySelector(`#${CSS.escape(fragment)}`)?.scrollIntoView({ block: 'start' })
   }
 
   function renderMarkdown(content: string, note: string | null, endpoint: string): string {
@@ -168,6 +216,7 @@
       if (/^https?:\/\//i.test(href)) await api.open_external_link(href)
       else {
         const target = await api.resolve_note_link(workspaceId, path, href)
+        if (disposed) return
         if (!target.path.toLowerCase().endsWith('.md')) {
           if (target.fragment) {
             error = 'Opening a specific section of this file is not supported.'
@@ -176,11 +225,8 @@
           await openWorkspaceFile(workspaceId, target.path)
           return
         }
-        if (target.path !== path) await open(target.path)
-        if (target.fragment && path === target.path) {
-          await tick()
-          document.querySelector('.note-read')?.querySelector(`#${CSS.escape(target.fragment)}`)?.scrollIntoView()
-        }
+        if (target.path !== path) await onOpenNote(target.path, target.fragment)
+        else if (target.fragment) await navigateToFragment(target.fragment)
       }
     } catch (reason) { error = 'Could not open the link.'; console.error(reason) }
   }
@@ -197,7 +243,7 @@
   }
 
   function extensions() {
-    return [basicSetup, markdown(), EditorView.lineWrapping, keymap.of([{ key: 'Mod-s', run: () => { void save(); return true } }]), EditorView.updateListener.of((update) => {
+    return [basicSetup, markdown(), EditorView.lineWrapping, editableCompartment.of(EditorView.editable.of(!prompt && !freezeEditors)), readOnlyCompartment.of(EditorState.readOnly.of(prompt || freezeEditors)), EditorView.updateListener.of((update) => {
       if (update.docChanged) {
         text = update.state.sliceDoc()
         message = ''
@@ -207,44 +253,33 @@
   }
 
   onMount(() => {
-    void loadPreferences()
     void window.pywebview?.api?.media_url?.(workspaceId).then((url) => { mediaUrl = url }).catch(console.error)
     view = new EditorView({ state: EditorState.create({ extensions: extensions() }), parent: host })
-    function beforeUnload(event: BeforeUnloadEvent) {
-      if (text !== savedText || saving) { event.preventDefault(); event.returnValue = '' }
-    }
-    window.addEventListener('beforeunload', beforeUnload)
-    function onKeydown(event: KeyboardEvent) {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); void save() }
-    }
-    window.addEventListener('keydown', onKeydown)
+    loadingPromise = loadNote()
     return () => {
-      window.removeEventListener('beforeunload', beforeUnload)
-      window.removeEventListener('keydown', onKeydown)
+      disposed = true
+      operation += 1
       clearTimeout(saveTimer)
       clearTimeout(externalTimer)
       view.destroy()
     }
   })
 
-  async function loadPreferences() {
-    try {
-      const preferences = (await window.pywebview?.api?.get_settings())?.editor
-      if (!preferences) throw new Error('Editor preferences unavailable')
-      autosave = preferences.autosave
-      autoReload = preferences.auto_reload
-      showReloadNotice = preferences.reload_notice
-      settingsLoaded = true
-    } catch (reason) { error = 'Could not load editor settings.'; console.error(reason) }
-  }
-
   function scheduleSave() {
     clearTimeout(saveTimer)
-    if (autosave && path && !conflict) saveTimer = setTimeout(() => void save(), 1000)
+    if (editorPreferences.autosave && !prompt && !freezeEditors && dirty && path && !conflict) {
+      saveTimer = setTimeout(() => {
+        if (!prompt && !freezeEditors) void save()
+      }, 1000)
+    }
   }
 
   export async function prepareClose(): Promise<boolean> {
-    if (prompt || opening) return false
+    if (prompt) return false
+    if (opening) {
+      await loadingPromise
+      if (disposed) return false
+    }
     if (savePromise && !(await savePromise)) return false
     if (!dirty) return true
     prompt = true
@@ -256,36 +291,43 @@
     return await save() && text === savedText
   }
 
-  export async function open(nextPath: string) {
-    if (path === nextPath || opening || prompt) return
-    if (!(await prepareClose())) return
+  export async function waitForLoad(): Promise<void> {
+    await loadingPromise
+  }
+
+  export async function waitForSave(): Promise<boolean> {
+    return savePromise ? await savePromise : true
+  }
+
+  export function resumeAfterFailedClose() {
+    scheduleSave()
+  }
+
+  async function loadNote() {
+    if (opening || disposed) return
     const api = window.pywebview?.api
     if (!api) return
     const token = ++operation
-    const originalText = text
     opening = true
     error = ''
     try {
-      const note = await api.read_note(workspaceId, nextPath)
+      const note = await api.read_note(workspaceId, notePath)
       if (token !== operation) return
-      if (text !== originalText) { error = 'The note changed while opening another file. Try again.'; return }
       clearTimeout(saveTimer)
       path = note.path
       outlineFilter = ''
-      selectedNote = note.path
       version = note.version
       savedText = note.content
       setDocument(note.content)
       conflict = false
       missing = false
       message = ''
-      await api.set_active_note(workspaceId, note.path)
       scheduleExternalCheck()
     } catch (reason) { if (token === operation) { error = 'Could not open or watch the note.'; console.error(reason); scheduleSave() } }
     finally { opening = false }
   }
 
-  async function save(expected = version): Promise<boolean> {
+  export async function save(expected = version): Promise<boolean> {
     if (savePromise) return savePromise
     if (!path || !window.pywebview?.api || (conflict && expected === version)) return false
     const api = window.pywebview.api
@@ -307,6 +349,7 @@
         if (text !== savedText) scheduleSave()
         return true
       } catch (reason) {
+        if (disposed || token !== operation) return false
         console.error(reason)
         await checkExternal()
         if (!conflict) error = 'Could not save the note.'
@@ -321,9 +364,28 @@
     externalTimer = setTimeout(() => void checkExternal(), 250)
   }
 
+  export async function checkExternalNow() {
+    clearTimeout(externalTimer)
+    await checkExternal()
+  }
+
+  export function hasUnsavedWork(): boolean {
+    return dirty || saving
+  }
+
+  export function closeStatus(): EditorStatus {
+    return { dirty, saving, conflict }
+  }
+
+  export async function discardForClose(): Promise<void> {
+    clearTimeout(saveTimer)
+    if (savePromise) await savePromise
+    clearTimeout(saveTimer)
+  }
+
   async function checkExternal() {
     const api = window.pywebview?.api
-    if (!path || !api) return
+    if (disposed || !path || !api) return
     const token = operation
     const checkedVersion = version
     try {
@@ -339,12 +401,12 @@
       diskVersion = note.version
       diskText = note.content
       missing = false
-      if (!dirty && autoReload && !saving) {
+      if (!dirty && editorPreferences.auto_reload && !saving) {
         version = note.version
         savedText = note.content
         setDocument(note.content)
         conflict = false
-        message = showReloadNotice ? 'File changed externally and was reloaded.' : ''
+        message = editorPreferences.reload_notice ? 'File changed externally and was reloaded.' : ''
       } else {
         clearTimeout(saveTimer)
         conflict = true
@@ -369,34 +431,17 @@
     message = 'Loaded the version on disk.'
   }
 
-  async function setPreference(event: Event, key: 'autosave' | 'auto_reload' | 'reload_notice') {
-    const checked = (event.currentTarget as HTMLInputElement).checked
-    const target = event.currentTarget as HTMLInputElement
-    target.disabled = true
-    try {
-      await window.pywebview?.api?.set_editor_preference(key, checked)
-      if (key === 'autosave') { autosave = checked; scheduleSave() }
-      if (key === 'auto_reload') autoReload = checked
-      if (key === 'reload_notice') showReloadNotice = checked
-    } catch (reason) { target.checked = !checked; error = 'Could not save editor settings.'; console.error(reason) }
-    finally { target.disabled = false }
-  }
 </script>
 
-<section class="note-panel" aria-label="Markdown editor">
+<section class="note-panel" class:inactive={!active} aria-label="Markdown editor" aria-hidden={!active} inert={!active} bind:this={panel} data-note-path={notePath}>
   <div class="note-toolbar">
     <strong>{path ?? 'Select a Markdown file'}</strong>
     {#if path}<span>{dirty ? 'Unsaved' : 'Saved'}</span>
       <button onclick={() => mode = 'source'} aria-pressed={mode === 'source'}>Source</button>
       <button onclick={() => mode = 'read'} aria-pressed={mode === 'read'}>Read</button>
-      <button onclick={() => save()} disabled={!dirty || saving || conflict}>Save</button>
+      <button onclick={() => save()} disabled={!dirty || saving || conflict || freezeEditors || prompt}>Save</button>
       {#if mode === 'read'}<button class="outline-toggle-btn" onclick={toggleOutlinePanel} aria-label="Toggle contents panel" aria-pressed={outlineOpen} title="Toggle contents panel">Contents</button>{/if}
     {/if}
-  </div>
-  <div class="note-settings">
-    <label><input type="checkbox" checked={autosave} disabled={!settingsLoaded} onchange={(event) => setPreference(event, 'autosave')} /> Autosave</label>
-    <label><input type="checkbox" checked={autoReload} disabled={!settingsLoaded} onchange={(event) => setPreference(event, 'auto_reload')} /> Auto-reload unchanged notes</label>
-    <label><input type="checkbox" checked={showReloadNotice} disabled={!settingsLoaded} onchange={(event) => setPreference(event, 'reload_notice')} /> Show reload notification</label>
   </div>
   <div class="note-body-layout">
     <div class="note-scroll">

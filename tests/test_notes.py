@@ -218,3 +218,48 @@ class NoteTests(unittest.TestCase):
         while "note_revision" not in window.values and time.monotonic() < deadline:
             time.sleep(0.01)
         self.assertIn("note_revision", window.values)
+
+    def test_open_tabs_are_watched_as_a_complete_set(self) -> None:
+        class TestWindow:
+            def __init__(self) -> None:
+                self.values: dict[str, int] = {}
+                self.state: SharedState = self.values
+
+            def destroy(self) -> None:
+                pass
+
+        other_path = self.root / "other.md"
+        other_path.write_text("other", encoding="utf-8")
+        bridge = Bridge()
+        self.addCleanup(bridge._close)
+        window = TestWindow()
+        bridge._attach_window(window)
+        workspace = bridge.open_workspace(str(self.root))["workspace_id"]
+
+        bridge.set_open_notes(workspace, ["note.md", "other.md"])
+        bridge._note_changed(other_path)
+        deadline = time.monotonic() + 3
+        while "note_revision" not in window.values and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertIn("note_revision", window.values)
+
+        bridge.set_open_notes(workspace, [])
+        # A late legacy active-note update must not override the full-set API.
+        bridge.set_active_note(workspace, "other.md")
+        with bridge._signal_lock:
+            bridge._note_pending = False
+        bridge._note_changed(other_path)
+        with bridge._signal_lock:
+            self.assertFalse(bridge._note_pending)
+
+    def test_open_note_registration_validates_before_replacing(self) -> None:
+        bridge = Bridge()
+        self.addCleanup(bridge._close)
+        workspace = bridge.open_workspace(str(self.root))["workspace_id"]
+        bridge.set_open_notes(workspace, ["note.md"])
+
+        with self.assertRaises(ValueError):
+            bridge.set_open_notes(workspace, ["../outside.md"])
+
+        self.assertEqual(len(bridge._open_notes), 1)
+        self.assertTrue(bridge._open_notes_registered)
