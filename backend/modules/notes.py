@@ -15,6 +15,58 @@ class NoteSnapshot(TypedDict):
     version: str
 
 
+class NoteBatch(TypedDict):
+    notes: list[NoteSnapshot]
+    next_index: int
+
+
+def list_markdown_notes(root: Path) -> list[str]:
+    """List workspace Markdown files without following links or hiding scan errors."""
+    def raise_scan_error(error: OSError) -> None:
+        raise error
+
+    paths: list[str] = []
+    for folder, directories, files in os.walk(root, onerror=raise_scan_error):
+        parent = Path(folder)
+        # Linked directories and files need a deliberate policy before planning moves.
+        for name in directories + files:
+            path = parent / name
+            if path.is_symlink() or path.is_junction():
+                raise ValueError(f"Cannot plan across a link or junction: {path}")
+        for name in files:
+            if Path(name).suffix.lower() == ".md":
+                paths.append((parent / name).relative_to(root).as_posix())
+    return sorted(paths)
+
+
+def read_note_batch(
+    root: Path, paths: list[str], start: int, max_bytes: int, max_notes: int
+) -> NoteBatch:
+    """Read a bounded batch; a single oversized note is returned on its own."""
+    if not isinstance(paths, list) or not all(isinstance(path, str) for path in paths):
+        raise TypeError("Note paths must be a list of strings")
+    if any(type(value) is not int for value in (start, max_bytes, max_notes)):
+        raise TypeError("Batch limits must be integers")
+    if (
+        not 0 <= start <= len(paths)
+        or not 1 <= max_bytes <= 2_000_000
+        or not 1 <= max_notes <= 100
+    ):
+        raise ValueError("Invalid note batch limits")
+    notes: list[NoteSnapshot] = []
+    total = 0
+    index = start
+    while index < len(paths) and len(notes) < max_notes:
+        note = read_note(root, paths[index])
+        size = len(note["content"].encode("utf-8"))
+        if notes and total + size > max_bytes:
+            break
+        notes.append(note)
+        total += size
+        index += 1
+    return {"notes": notes, "next_index": index}
+
+
 class NoteConflictError(Exception):
     """Signal that the file no longer matches the version being edited."""
 

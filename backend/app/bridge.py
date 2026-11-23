@@ -6,16 +6,20 @@ import sys
 import threading
 import webbrowser
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, TypedDict
 from urllib.parse import urlsplit
 
 from backend.app.settings import SETTINGS_PATH, load_settings, save_settings
 from backend.app.workspace import load_workspace_settings
+from backend.modules.link_paths import resolve_moved_targets
 from backend.modules.notes import (
+    NoteBatch,
     NoteSnapshot,
+    list_markdown_notes,
     markdown_name,
     note_path,
     read_note,
+    read_note_batch,
     resolve_note_link,
     save_note,
 )
@@ -30,6 +34,11 @@ class Window(Protocol):
     state: SharedState
 
     def destroy(self) -> None: ...
+
+
+class NoteTargets(TypedDict):
+    path: str
+    targets: list[str]
 
 
 class Bridge:
@@ -163,6 +172,19 @@ class Bridge:
         with self._lock:
             return read_note(self._require_tree(workspace_id).root, path)
 
+    def list_plan_notes(self, workspace_id: str) -> list[str]:
+        """List Markdown files to inspect while planning a move."""
+        with self._lock:
+            return list_markdown_notes(self._require_tree(workspace_id).root)
+
+    def read_plan_notes(
+        self, workspace_id: str, paths: list[str], start: int, max_bytes: int, max_notes: int
+    ) -> NoteBatch:
+        """Read the next bounded group of note snapshots for move planning."""
+        with self._lock:
+            root = self._require_tree(workspace_id).root
+            return read_note_batch(root, paths, start, max_bytes, max_notes)
+
     def create_note(self, workspace_id: str, directory: str, name: str) -> str:
         """Create an empty Markdown note in the active workspace."""
         with self._lock:
@@ -174,6 +196,32 @@ class Bridge:
         """Create one folder in the active workspace."""
         with self._lock:
             return self._require_tree(workspace_id).create_entry(directory, name, True)
+
+    def plan_link_targets(
+        self,
+        workspace_id: str,
+        note: str,
+        source: str,
+        destination: str,
+        targets: list[str],
+    ) -> list[str | None]:
+        """Calculate replacement link targets without modifying the workspace."""
+        with self._lock:
+            root = self._require_tree(workspace_id).root
+            return resolve_moved_targets(root, note, source, destination, targets)
+
+    def plan_link_targets_batch(
+        self, workspace_id: str, source: str, destination: str, notes: list[NoteTargets]
+    ) -> list[list[str | None]]:
+        """Calculate target changes for a bounded group of Markdown notes."""
+        if not isinstance(notes, list) or len(notes) > 100:
+            raise ValueError("Expected at most 100 notes")
+        with self._lock:
+            root = self._require_tree(workspace_id).root
+            return [
+                resolve_moved_targets(root, note["path"], source, destination, note["targets"])
+                for note in notes
+            ]
 
     def resolve_note_link(
         self, workspace_id: str, note: str, href: str

@@ -1,5 +1,6 @@
 """Focused tests for file-tree caching, scheduling and Windows watcher events."""
 
+import os
 import tempfile
 import threading
 import time
@@ -69,6 +70,29 @@ class FileTreeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             bridge.create_note("old", "", "stale")
 
+    def test_plan_link_targets_checks_workspace_without_changing_files(self) -> None:
+        bridge = Bridge()
+        self.addCleanup(bridge._close)
+        workspace = bridge.open_workspace(str(self.root))["workspace_id"]
+        note = self.root / "note.md"
+        note.write_text("[link](old.md)", encoding="utf-8")
+        self.assertEqual(
+            bridge.plan_link_targets(workspace, "note.md", "old.md", "new.md", ["old.md"]),
+            ["new.md"],
+        )
+        self.assertEqual(note.read_text(encoding="utf-8"), "[link](old.md)")
+        paths = bridge.list_plan_notes(workspace)
+        batch = bridge.read_plan_notes(workspace, paths, 0, 1000, 10)
+        self.assertEqual(batch["notes"][0]["path"], "note.md")
+        self.assertEqual(
+            bridge.plan_link_targets_batch(workspace, "old.md", "new.md", [{"path": "note.md", "targets": ["old.md"]}]),
+            [["new.md"]],
+        )
+        with self.assertRaises(ValueError):
+            bridge.plan_link_targets("stale", "note.md", "old.md", "new.md", ["old.md"])
+        with self.assertRaises(ValueError):
+            bridge.read_plan_notes("stale", paths, 0, 1000, 10)
+
     def test_create_rejects_invalid_names_and_outside_directory(self) -> None:
         for name in ("", "..", " ", "CON", "bad/name", "bad\\name", "bad?.txt", "end."):
             with self.subTest(name=name), self.assertRaises(ValueError):
@@ -83,6 +107,68 @@ class FileTreeTests(unittest.TestCase):
         wait_until(lambda: directory(self.tree, "")["items"] == [])
         self.tree.create_entry("", "new.md", False)
         wait_until(lambda: any(i["name"] == "new.md" for i in (directory(self.tree, "")["items"] or [])))
+
+    @unittest.skipUnless(os.name == "nt", "Windows rename semantics")
+    def test_move_entry_preserves_existing_files_and_workspace_boundary(self) -> None:
+        (self.root / "source").mkdir()
+        (self.root / "target").mkdir()
+        (self.root / "source" / "note.md").write_text("original", encoding="utf-8")
+        (self.root / "target" / "note.md").write_text("keep", encoding="utf-8")
+        with self.assertRaises(FileExistsError):
+            self.tree.move_entry("source/note.md", "target/note.md")
+        self.assertEqual((self.root / "target" / "note.md").read_text(), "keep")
+        with self.assertRaises(ValueError):
+            self.tree.move_entry("source", "source/child")
+        with self.assertRaises(ValueError):
+            self.tree.move_entry("source", "../outside")
+        with self.assertRaises(ValueError):
+            self.tree.move_entry("", "target/root")
+        self.assertEqual(self.tree.move_entry("source/note.md", "target/moved.md"), "target/moved.md")
+        self.assertEqual((self.root / "target" / "moved.md").read_text(), "original")
+        (self.root / "source" / "child").mkdir()
+        (self.root / "source" / "child" / "inside.md").write_text("nested", encoding="utf-8")
+        self.tree.move_entry("source", "target/source")
+        self.assertEqual((self.root / "target" / "source" / "child" / "inside.md").read_text(), "nested")
+
+    @unittest.skipUnless(os.name == "nt", "Windows rename semantics")
+    def test_move_directory_case_and_remove_stale_cached_descendants(self) -> None:
+        (self.root / "docs" / "nested").mkdir(parents=True)
+        self.tree.set_visible("docs", True)
+        self.tree.set_visible("docs/nested", True)
+        wait_until(lambda: directory(self.tree, "docs/nested")["items"] is not None)
+        self.assertEqual(self.tree.move_entry("docs", "Docs"), "Docs")
+        self.assertEqual([p.name for p in self.root.iterdir()], ["Docs"])
+        self.assertFalse(any(d["path"].lower().startswith("docs") for d in self.tree.snapshot()["directories"]))
+        self.tree.set_visible("Docs", True)
+        self.tree.set_visible("Docs/nested", True)
+        wait_until(lambda: directory(self.tree, "Docs/nested")["items"] is not None)
+        self.tree.move_entry("Docs", "archive")
+        self.assertFalse(any(d["path"].lower().startswith("docs") for d in self.tree.snapshot()["directories"]))
+
+    @unittest.skipUnless(os.name == "nt", "Windows rename semantics")
+    def test_move_discards_an_inflight_scan_for_old_directory(self) -> None:
+        (self.root / "old").mkdir()
+        started, release, finished = threading.Event(), threading.Event(), threading.Event()
+        real_scan = scan_dir
+
+        def delayed_scan(path: Path, include_modified: bool = False) -> list[FileTreeItem]:
+            if path.name == "old":
+                started.set()
+                release.wait(5)
+            try:
+                return real_scan(path, include_modified)
+            finally:
+                finished.set()
+
+        with patch("backend.services.filesystem.scan_dir", side_effect=delayed_scan):
+            self.tree.set_visible("old", True)
+            self.assertTrue(started.wait(5))
+            try:
+                self.tree.move_entry("old", "new")
+            finally:
+                release.set()
+            self.assertTrue(finished.wait(5))
+            wait_until(lambda: not any(d["path"] == "old" for d in self.tree.snapshot()["directories"]))
 
     def test_watcher_create_rename_delete_and_sort(self) -> None:
         self.tree.set_visible("", True)

@@ -157,8 +157,8 @@ class FileTree:
             raise ValueError("Directory must stay inside the workspace") from error
         return path.as_posix() if path.parts else "", resolved
 
-    def create_entry(self, directory: str, name: str, is_directory: bool) -> str:
-        """Create one child without replacing an existing file or directory."""
+    @staticmethod
+    def _validate_name(name: str) -> None:
         if not isinstance(name, str) or not name or name in (".", ".."):
             raise ValueError("A file or folder name is required")
         if (
@@ -168,6 +168,10 @@ class FileTree:
             or ntpath.isreserved(name)
         ):
             raise ValueError("Invalid file or folder name")
+
+    def create_entry(self, directory: str, name: str, is_directory: bool) -> str:
+        """Create one child without replacing an existing file or directory."""
+        self._validate_name(name)
         if not isinstance(is_directory, bool):
             raise TypeError("is_directory must be a boolean")
         key, parent = self._path(directory)
@@ -180,6 +184,47 @@ class FileTree:
                 pass
         self.refresh(key)
         return f"{key}/{name}" if key else name
+
+    def move_entry(self, source: str, destination: str) -> str:
+        """Move an entry without replacing an existing destination on Windows."""
+        if os.name != "nt":
+            raise NotImplementedError("Safe moves are currently supported on Windows only")
+        source_key, source_path = self._path(source)
+        destination_key, _ = self._path(destination)
+        if not source_key or not destination_key:
+            raise ValueError("The workspace root cannot be moved or replaced")
+        self._validate_name(Path(destination_key).name)
+        _, destination_parent = self._path(str(Path(destination_key).parent))
+        destination_path = destination_parent / Path(destination_key).name
+        # Avoid following links and junctions while moving entries or choosing their parents.
+        for key in (source_key, destination_key):
+            current = self.root
+            for part in Path(key).parts:
+                current = current / part
+                if current.is_symlink() or current.is_junction():
+                    raise ValueError("Moving through links or junctions is not supported")
+        if source_key == destination_key:
+            if not source_path.exists():
+                raise FileNotFoundError(str(source_path))
+            return destination_key
+        is_directory = source_path.is_dir()
+        if is_directory and destination_path != source_path and destination_path.is_relative_to(source_path):
+            raise ValueError("A folder cannot be moved inside itself")
+        # Windows rename fails if the target exists; a prior existence check alone would race.
+        source_path.rename(destination_path)
+        if is_directory:
+            with self._condition:
+                # Drop old cache entries; scans already in flight must not publish into a replacement entry.
+                prefix = os.path.normcase(source_key).replace("\\", "/")
+                for key in list(self._directories):
+                    normalized = os.path.normcase(key).replace("\\", "/")
+                    if normalized == prefix or normalized.startswith(prefix + "/"):
+                        del self._directories[key]
+                self._changed()
+            self._signal()
+        self.path_changed(source_path, invalidate_descendants=True)
+        self.path_changed(destination_path, invalidate_descendants=True)
+        return destination_key
 
     def _changed(self) -> None:
         self._revision += 1
@@ -395,6 +440,8 @@ class FileTree:
             with self._condition:
                 if self._closed:
                     return
+                if self._directories.get(key) is not directory:
+                    continue
                 directory.loading = False
                 # A change during the scan, or a switch to date sorting, makes its result unreliable. Schedule another scan instead.
                 if version != directory.version or (
