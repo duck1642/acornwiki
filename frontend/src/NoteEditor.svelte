@@ -39,19 +39,85 @@
   let saveTimer: ReturnType<typeof setTimeout> | undefined
   let savePromise: Promise<boolean> | undefined
   let mediaUrl = $state('')
+  let outlineFilter = $state('')
   let dirty = $derived(text !== savedText)
   let rendered = $derived(mode === 'read' ? renderMarkdown(text, path, mediaUrl) : '')
   let outline = $derived(extractOutline(rendered))
+  let filterIsActive = $derived(Boolean(outlineFilter.trim()))
 
-  type OutlineHeading = { id: string; label: string; level: number }
+  type FlatOutlineHeading = { id: string; label: string; level: number }
+  type OutlineHeading = FlatOutlineHeading & { children: OutlineHeading[] }
 
-  function extractOutline(html: string): OutlineHeading[] {
+  let outlineOpen = $state(true)
+  let expandedOutlineIds = $state<string[]>([])
+  let outlineTree = $derived(buildOutlineTree(outline))
+  let filteredOutline = $derived(filterOutline(outlineTree, outlineFilter.trim().toLowerCase()))
+  let expandableOutlineIds = $derived(collectExpandableIds(outlineTree))
+  let allOutlineExpanded = $derived(expandableOutlineIds.length > 0 && expandableOutlineIds.every((id) => expandedOutlineIds.includes(id)))
+
+  $effect(() => {
+    if (mode !== 'read') return
+    const signature = `${path ?? ''}\n${outline.map((heading) => `${heading.id}:${heading.level}`).join('\n')}`
+    if (signature === lastOutlineSignature) return
+    lastOutlineSignature = signature
+    expandedOutlineIds = collectExpandableIds(outlineTree)
+  })
+
+  let lastOutlineSignature = ''
+
+  function extractOutline(html: string): FlatOutlineHeading[] {
     if (!html) return []
     const template = document.createElement('template')
     template.innerHTML = html
     return Array.from(template.content.querySelectorAll<HTMLHeadingElement>('h1, h2, h3, h4, h5, h6'))
       .map((heading) => ({ id: heading.id, label: heading.textContent?.trim() ?? '', level: Number(heading.tagName.slice(1)) }))
       .filter((heading) => heading.id && heading.label)
+  }
+
+  function buildOutlineTree(headings: FlatOutlineHeading[]): OutlineHeading[] {
+    const roots: OutlineHeading[] = []
+    const parents: OutlineHeading[] = []
+    for (const heading of headings) {
+      const node: OutlineHeading = { ...heading, children: [] }
+      while (parents.length && parents[parents.length - 1].level >= node.level) parents.pop()
+      const parent = parents[parents.length - 1]
+      if (parent) parent.children.push(node)
+      else roots.push(node)
+      parents.push(node)
+    }
+    return roots
+  }
+
+  function filterOutline(nodes: OutlineHeading[], query: string): OutlineHeading[] {
+    if (!query) return nodes
+    return nodes.flatMap((node) => {
+      const children = filterOutline(node.children, query)
+      return node.label.toLowerCase().includes(query) || children.length ? [{ ...node, children }] : []
+    })
+  }
+
+  function collectExpandableIds(nodes: OutlineHeading[]): string[] {
+    const ids: string[] = []
+    for (const node of nodes) {
+      if (node.children.length) {
+        ids.push(node.id, ...collectExpandableIds(node.children))
+      }
+    }
+    return ids
+  }
+
+  function toggleOutlineNode(id: string) {
+    expandedOutlineIds = expandedOutlineIds.includes(id)
+      ? expandedOutlineIds.filter((item) => item !== id)
+      : [...expandedOutlineIds, id]
+  }
+
+  function toggleAllOutline() {
+    expandedOutlineIds = allOutlineExpanded ? [] : [...expandableOutlineIds]
+  }
+
+  function toggleOutlinePanel() {
+    outlineOpen = !outlineOpen
   }
 
   function jumpToHeading(event: MouseEvent, id: string) {
@@ -205,6 +271,7 @@
       if (text !== originalText) { error = 'The note changed while opening another file. Try again.'; return }
       clearTimeout(saveTimer)
       path = note.path
+      outlineFilter = ''
       selectedNote = note.path
       version = note.version
       savedText = note.content
@@ -323,6 +390,7 @@
       <button onclick={() => mode = 'source'} aria-pressed={mode === 'source'}>Source</button>
       <button onclick={() => mode = 'read'} aria-pressed={mode === 'read'}>Read</button>
       <button onclick={() => save()} disabled={!dirty || saving || conflict}>Save</button>
+      {#if mode === 'read'}<button class="outline-toggle-btn" onclick={toggleOutlinePanel} aria-label="Toggle contents panel" aria-pressed={outlineOpen} title="Toggle contents panel">Contents</button>{/if}
     {/if}
   </div>
   <div class="note-settings">
@@ -343,17 +411,21 @@
         {#if path && mode === 'read'}<article class="note-content note-read" use:linkHandler>{@html rendered}</article>{/if}
       </div>
     </div>
-    {#if path && mode === 'read'}
+    {#if path && mode === 'read' && outlineOpen}
       <aside class="note-outline" aria-label="Contents">
-        <h2 class="outline-title">Contents</h2>
+        <div class="outline-heading">
+          <h2 class="outline-title">Contents</h2>
+          <button class="outline-collapse-all" aria-label={filterIsActive || allOutlineExpanded ? 'Collapse all headings' : 'Expand all headings'} title={filterIsActive ? 'Clear the filter to change heading expansion' : allOutlineExpanded ? 'Collapse all headings' : 'Expand all headings'} aria-expanded={filterIsActive || allOutlineExpanded} disabled={expandableOutlineIds.length === 0 || filterIsActive} onclick={toggleAllOutline}>{filterIsActive || allOutlineExpanded ? '−' : '+'}</button>
+        </div>
+        <input class="outline-filter" type="search" aria-label="Filter headings" placeholder="Filter headings..." bind:value={outlineFilter} />
         {#if outline.length === 0}
           <p class="outline-empty">No headings in this note.</p>
+        {:else if filteredOutline.length === 0}
+          <p class="outline-empty">No headings match this filter.</p>
         {:else}
           <nav class="outline-nav" aria-label="Note headings">
             <ul>
-              {#each outline as heading (heading.id)}
-                <li><a class="outline-link outline-level-{heading.level}" href={`#${heading.id}`} onclick={(event) => jumpToHeading(event, heading.id)} title={heading.label}>{heading.label}</a></li>
-              {/each}
+              {@render renderHeadings(filteredOutline, 0, filterIsActive)}
             </ul>
           </nav>
         {/if}
@@ -385,3 +457,21 @@
     </div>
   {/if}
 </section>
+
+{#snippet renderHeadings(nodes: OutlineHeading[], depth: number, filterIsActive: boolean)}
+  {#each nodes as heading (heading.id)}
+    {@const hasChildren = heading.children.length > 0}
+    {@const expanded = filterIsActive || expandedOutlineIds.includes(heading.id)}
+    <li class="outline-row" style={`padding-left: ${depth * 14}px`}>
+      {#if hasChildren}
+        <button class="outline-caret" aria-label={expanded ? `Collapse ${heading.label}` : `Expand ${heading.label}`} aria-expanded={expanded} disabled={filterIsActive} onclick={() => toggleOutlineNode(heading.id)}>{expanded ? '▾' : '▸'}</button>
+      {:else}
+        <span class="outline-caret-spacer" aria-hidden="true"></span>
+      {/if}
+      <a class="outline-link outline-level-{heading.level}" href={`#${heading.id}`} onclick={(event) => jumpToHeading(event, heading.id)} title={heading.label}>{heading.label}</a>
+    </li>
+    {#if hasChildren && expanded}
+      {@render renderHeadings(heading.children, depth + 1, filterIsActive)}
+    {/if}
+  {/each}
+{/snippet}

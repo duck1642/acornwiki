@@ -85,6 +85,10 @@
   let workspaceId = $state<string | null>(null)
   let appearance = $state<AppearanceState>(defaultAppearance)
   let appearanceSaving = $state(false)
+  let settingsOpen = $state(false)
+  let filePanelOpen = $state(true)
+  let workspacePicker: HTMLDetailsElement | undefined = $state()
+  let settingsMenu: HTMLDetailsElement | undefined = $state()
   let editor: NoteEditor | undefined = $state()
   let selectedNote = $state<string | null>(null)
   let latestRevision = -1
@@ -113,6 +117,13 @@
   $effect(() => {
     document.documentElement.dataset.theme = appearance.theme
     document.documentElement.dataset.surface = appearance.surface_mode
+  })
+
+  $effect(() => {
+    const currentViewport = viewport
+    if (filePanelOpen && currentViewport && currentViewport.scrollTop !== scrollTop) {
+      currentViewport.scrollTop = scrollTop
+    }
   })
 
   $effect(() => {
@@ -219,6 +230,7 @@
     if (!api) return
     if (appearanceSaving) return
     if (editor && !(await editor.prepareClose())) return
+    if (workspacePicker) workspacePicker.open = false
     loadingWorkspace = true
     workspaceMessage = ''
     selectedWorkspace = null
@@ -245,6 +257,15 @@
       workspaceMessage = `Could not open workspace: ${path}. Check the folder and its settings.`
       console.error(error)
     } finally { loadingWorkspace = false }
+  }
+  function toggleFilePanel() {
+    filePanelOpen = !filePanelOpen
+  }
+  async function toggleSettings() {
+    settingsOpen = !settingsOpen
+    if (!settingsOpen) return
+    await tick()
+    settingsMenu?.querySelector<HTMLElement>('summary')?.focus()
   }
   function normalizeAppearance(value: WorkspaceAppearance): AppearanceState {
     if (value.theme !== 'warm-charcoal' && value.theme !== 'warm-paper') {
@@ -440,20 +461,27 @@
 </script>
 
 <main class="app-shell">
-  <header class="app-header">
-    <div class="brand-lockup">
-      <img src="/favicon.svg" alt="" width="28" height="28" />
-      <h1>acornwiki</h1>
+  <header class="menu-bar" aria-label="Application menu">
+    <div class="menu-items" aria-label="Menus">
+      <button class="menu-sidebar-toggle" onclick={toggleFilePanel} aria-label="Toggle files panel" aria-pressed={filePanelOpen} title="Toggle files panel"><Icon name="folder" /></button>
+      {#each ['File', 'Edit', 'View', 'Navigate', 'Help'] as menu}
+        <button class="menu-item" disabled title="This menu is not available yet">{menu}</button>
+      {/each}
+    </div>
+    <div class="appearance-controls" aria-label="Appearance">
+      <div class="appearance-group" role="group" aria-label="Theme">
+        <button class:active={appearance.theme === 'warm-charcoal'} aria-pressed={appearance.theme === 'warm-charcoal'} disabled={!workspaceId || appearanceSaving} onclick={() => setAppearance({ theme: 'warm-charcoal' })}>Warm Charcoal</button>
+        <button class:active={appearance.theme === 'warm-paper'} aria-pressed={appearance.theme === 'warm-paper'} disabled={!workspaceId || appearanceSaving} onclick={() => setAppearance({ theme: 'warm-paper' })}>Warm Paper</button>
+      </div>
+      <div class="appearance-group surface-group" role="group" aria-label="Document surface">
+        <button class:active={appearance.surface_mode === 'framed'} aria-pressed={appearance.surface_mode === 'framed'} disabled={!workspaceId || appearanceSaving} onclick={() => setAppearance({ surface_mode: 'framed' })}>Framed</button>
+        <button class:active={appearance.surface_mode === 'seamless'} aria-pressed={appearance.surface_mode === 'seamless'} disabled={!workspaceId || appearanceSaving} onclick={() => setAppearance({ surface_mode: 'seamless' })}>Seamless</button>
+      </div>
     </div>
     <div class="header-actions">
-      <p class="connection-status" aria-live="polite">
-        <span class="connection-dot" class:connected={ready}></span>
-        {message}
-      </p>
-      <button class="icon-button" onclick={ping} disabled={!ready} aria-label="Check connection" title="Check connection">
-        <Icon name="refresh" />
-      </button>
-      <details class="settings-menu">
+      <p class="connection-status" aria-live="polite"><span class="connection-dot" class:connected={ready}></span>{message}</p>
+      <button class="icon-button" onclick={ping} disabled={!ready} aria-label="Check connection" title="Check connection"><Icon name="refresh" /></button>
+      <details bind:open={settingsOpen} bind:this={settingsMenu} class="settings-menu">
         <summary>Settings</summary>
         <div class="settings-content">
           <strong>Blocked file extensions</strong>
@@ -466,45 +494,26 @@
     </div>
   </header>
 
-  <nav class="workspace-switcher" aria-label="Workspaces">
-    <div class="workspace-switcher-label">Workspaces</div>
-    <div class="workspace-list">
-      {#if workspacesLoaded && workspaces.length === 0}<span class="empty-workspaces">No saved workspaces.</span>{/if}
-      {#each workspaces as workspace}
-        <button class="workspace-choice" class:selected={selectedWorkspace === workspace} aria-current={selectedWorkspace === workspace ? 'page' : undefined} onclick={() => selectWorkspace(workspace)} disabled={loadingWorkspace || moving || appearanceSaving} title={workspace}>{workspace}</button>
-      {/each}
-    </div>
-  </nav>
+  <div class="workspace-layout" class:files-hidden={!filePanelOpen}>
+    <nav class="activity-bar" aria-label="Application tools">
+      <button class="activity-button" class:active={filePanelOpen} onclick={toggleFilePanel} aria-label="Files" aria-pressed={filePanelOpen} title="Files"><Icon name="folder" /></button>
+      <button class="activity-button" disabled aria-label="Graph view" title="Graph view is not available yet"><Icon name="network" /></button>
+      <button class="activity-button" disabled aria-label="Command palette" title="Command palette is not available yet"><Icon name="terminal" /></button>
+      <div class="activity-spacer"></div>
+      <button class="activity-button" onclick={toggleSettings} aria-label="Settings" aria-expanded={settingsOpen} title="Settings"><Icon name="settings" /></button>
+    </nav>
 
-  {#if selectedWorkspace}
-    <section class="workspace-view" aria-label="Workspace">
-      <header class="workspace-toolbar">
-        <div class="workspace-title">
-          <span>Workspace</span>
-          <strong title={selectedWorkspace}>{selectedWorkspace}</strong>
-        </div>
-        <div class="appearance-controls">
-          <div class="appearance-group" role="group" aria-label="Theme">
-            <button class:active={appearance.theme === 'warm-charcoal'} aria-pressed={appearance.theme === 'warm-charcoal'} disabled={appearanceSaving} onclick={() => setAppearance({ theme: 'warm-charcoal' })}>Warm Charcoal</button>
-            <button class:active={appearance.theme === 'warm-paper'} aria-pressed={appearance.theme === 'warm-paper'} disabled={appearanceSaving} onclick={() => setAppearance({ theme: 'warm-paper' })}>Warm Paper</button>
-          </div>
-          <div class="appearance-group surface-group" role="group" aria-label="Document surface">
-            <button class:active={appearance.surface_mode === 'framed'} aria-pressed={appearance.surface_mode === 'framed'} disabled={appearanceSaving} onclick={() => setAppearance({ surface_mode: 'framed' })}>Framed</button>
-            <button class:active={appearance.surface_mode === 'seamless'} aria-pressed={appearance.surface_mode === 'seamless'} disabled={appearanceSaving} onclick={() => setAppearance({ surface_mode: 'seamless' })}>Seamless</button>
+    {#if filePanelOpen}
+      <aside class="file-tree" aria-label="Workspace file tree" inert={moving}>
+        <div class="tree-heading">
+          <h2>Files</h2>
+          <div class="tree-actions">
+            <button class="icon-button" onclick={() => refreshTree(null)} disabled={!workspaceId} aria-label="Refresh file tree" title="Refresh file tree"><Icon name="refresh" /></button>
+            <button class="icon-button" disabled={!workspaceId || creating} onclick={() => createEntry('note')} aria-label="New note" title="New note"><Icon name="file-plus" /></button>
+            <button class="icon-button" disabled={!workspaceId || creating} onclick={() => createEntry('folder')} aria-label="New folder" title="New folder"><Icon name="folder-plus" /></button>
           </div>
         </div>
-      </header>
-
-      <div class="workspace-layout">
-        <aside class="file-tree" aria-label="Workspace file tree" inert={moving}>
-          <div class="tree-heading">
-            <h2>Files</h2>
-            <div class="tree-actions">
-              <button class="icon-button" onclick={() => refreshTree(null)} aria-label="Refresh file tree" title="Refresh file tree"><Icon name="refresh" /></button>
-              <button class="icon-button" disabled={creating} onclick={() => createEntry('note')} aria-label="New note" title="New note"><Icon name="file-plus" /></button>
-              <button class="icon-button" disabled={creating} onclick={() => createEntry('folder')} aria-label="New folder" title="New folder"><Icon name="folder-plus" /></button>
-            </div>
-          </div>
+        {#if workspaceId}
           <div class="tree-options">
             <label>Sort <select value={sortMode} onchange={changeSortMode}><option value="alphabetic">Alphabetical</option><option value="modified">Modified</option></select></label>
             <label>New item in <select aria-label="Destination" bind:value={creationFolder}><option value="">Workspace root</option>{#each expandedFolders as folder}<option value={folder}>{folder}</option>{/each}</select></label>
@@ -549,16 +558,39 @@
               <li aria-hidden="true" style={`height: ${(visibleTree.length - endRow) * rowHeight}px`}></li>
             </ul>
           </div>
-        </aside>
-        {#if workspaceId && editorMounted}<NoteEditor bind:this={editor} bind:selectedNote {workspaceId} {workspaceMessage} />
-        {:else if workspaceMessage}<p class="workspace-message" role="alert">{workspaceMessage}</p>{/if}
-      </div>
-    </section>
-  {:else}
-    <section class="empty-state" aria-live="polite">
-      {#if workspaceMessage}<p class="workspace-message" role="alert">{workspaceMessage}</p>{/if}
-      <h2>Select a workspace</h2>
-      <p>Choose a workspace above to browse its notes.</p>
-    </section>
-  {/if}
+        {:else}
+          <p class="tree-status-message">Choose a workspace below to see its files.</p>
+        {/if}
+        <footer class="sidebar-footer">
+          <details bind:this={workspacePicker} class="workspace-picker">
+            <summary title={selectedWorkspace ?? 'Select workspace'}><span>{selectedWorkspace ?? 'Select workspace'}</span><span aria-hidden="true">⌄</span></summary>
+            <div class="workspace-picker-menu">
+              <strong>Workspaces</strong>
+              {#if workspacesLoaded && workspaces.length === 0}<p class="empty-workspaces">No saved workspaces.</p>{/if}
+              {#each workspaces as workspace}
+                <button class:selected={selectedWorkspace === workspace} aria-current={selectedWorkspace === workspace ? 'page' : undefined} onclick={() => selectWorkspace(workspace)} disabled={loadingWorkspace || moving || appearanceSaving} title={workspace}>{workspace}</button>
+              {/each}
+            </div>
+          </details>
+        </footer>
+      </aside>
+    {/if}
+
+    {#if workspaceId && editorMounted}
+      <NoteEditor bind:this={editor} bind:selectedNote {workspaceId} {workspaceMessage} />
+    {:else if selectedWorkspace}
+      {#if workspaceMessage}<p class="workspace-message" role="alert">{workspaceMessage}</p>
+      {:else}<section class="empty-state"><h2>No note selected</h2><p>Choose a Markdown file from the workspace tree.</p></section>{/if}
+    {:else}
+      <section class="empty-state" aria-live="polite">
+        {#if workspaceMessage}<p class="workspace-message" role="alert">{workspaceMessage}</p>{/if}
+        <h2>Select a workspace</h2>
+        <p>Choose a workspace from the file panel.</p>
+      </section>
+    {/if}
+  </div>
+  <footer class="status-bar">
+    <span>{selectedWorkspace ?? 'No workspace selected'}</span>
+    <span>{selectedNote ?? 'No note open'} · {appearance.theme === 'warm-paper' ? 'Warm Paper' : 'Warm Charcoal'} · {appearance.surface_mode === 'seamless' ? 'Seamless' : 'Framed'}</span>
+  </footer>
 </main>

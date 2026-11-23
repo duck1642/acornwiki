@@ -2,7 +2,7 @@
 
 ## Lucide Icons
 
-The application uses a small set of Lucide SVG paths for the file tree and workspace actions. The `folder` SVG in `../tmp/icon-comparison/` and the Lucide/Tabler visual comparison were used to choose the icon style. Lucide Icons are distributed under the ISC License. The Lucide `code` icon is derived from Feather and is covered by the MIT notice below.
+The application uses a small set of Lucide SVG paths for the file tree and workspace actions. The `folder` SVG in `../tmp/icon-comparison/` and the Lucide/Tabler visual comparison were used to choose the icon style. Lucide Icons are distributed under the ISC License. The Lucide `code` and `terminal` icons are derived from Feather and are covered by the MIT notice below.
 
 Source: [lucide-icons/lucide](https://github.com/lucide-icons/lucide)
 
@@ -24,7 +24,7 @@ ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 ```
 
-The `code` icon also carries the following notice from the Lucide license file:
+The `code` and `terminal` icons also carry the following notice from the Lucide license file:
 
 ```text
 The MIT License (MIT)
