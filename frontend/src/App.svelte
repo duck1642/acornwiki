@@ -198,9 +198,11 @@
   let renderedRows = $derived(visibleTree.slice(startRow, endRow))
   $effect(() => {
     document.documentElement.dataset.theme = appearance.theme
+    setFileIconColors(document.documentElement)
+  })
+  $effect(() => {
     document.documentElement.dataset.surface = effectiveSurface
     document.documentElement.style.setProperty('--page-width', effectivePageWidth)
-    setFileIconColors(document.documentElement)
   })
 
   $effect(() => {

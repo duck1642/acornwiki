@@ -50,11 +50,12 @@ def sort_items(items: list[FileTreeItem], sort_mode: str) -> list[FileTreeItem]:
         return sorted(by_name, key=lambda item: not item["is_directory"])
     if sort_mode in ("modified", "modified_asc", "created", "created_asc"):
         key = "created_time" if sort_mode.startswith("created") else "modified_time"
-        return sorted(
+        by_date = sorted(
             items,
             key=lambda item: item.get(key) or 0,
             reverse=not sort_mode.endswith("_asc"),
         )
+        return sorted(by_date, key=lambda item: not item["is_directory"])
     raise ValueError(f"Unknown sort mode: {sort_mode}")
 
 

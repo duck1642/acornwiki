@@ -26,6 +26,22 @@ from backend.services.filesystem import (
 
 
 class SortOptionsTests(unittest.TestCase):
+    def test_date_sort_keeps_folders_before_files_in_both_directions(self) -> None:
+        items: list[FileTreeItem] = [
+            {"name": "old-file", "is_directory": False, "modified_time": 1, "created_time": 4},
+            {"name": "new-folder", "is_directory": True, "modified_time": 3, "created_time": 2},
+            {"name": "new-file", "is_directory": False, "modified_time": 4, "created_time": 3},
+            {"name": "old-folder", "is_directory": True, "modified_time": 2, "created_time": 1},
+        ]
+        for mode, expected in {
+            "modified": ["new-folder", "old-folder", "new-file", "old-file"],
+            "modified_asc": ["old-folder", "new-folder", "old-file", "new-file"],
+            "created": ["new-folder", "old-folder", "old-file", "new-file"],
+            "created_asc": ["old-folder", "new-folder", "new-file", "old-file"],
+        }.items():
+            with self.subTest(mode=mode):
+                self.assertEqual([item["name"] for item in sort_items(items, mode)], expected)
+
     def test_name_sort_keeps_folders_before_files_in_both_directions(self) -> None:
         items: list[FileTreeItem] = [
             {"name": "a.md", "is_directory": False, "modified_time": None, "created_time": None},
