@@ -11,22 +11,20 @@
   import { createMarkdownEditorExtensions, highlightCodeElement, lineNumbersExtension } from './markdownEditor'
   import type { EditorPreferences, EditorStatus, FlatOutlineHeading } from './sharedTypes'
 
-  // Require at least 3 underline characters for Setext headings so typing "-" for a bullet list does not turn text into H2.
+  // Disable Setext headings so typing "-" under a line or list item never turns it into H2,
+  // and Source/Read stay consistent (ATX "#" headings only).
   const markdownParser = new Marked({
     tokenizer: {
-      lheading(src: string) {
-        const cap = /^(?! {0,3}(?:[#>*-]|\d+\.) )((?:.|\n(?!\s*\n))+?)\n {0,3}(={3,}|-{3,})[ \t]*(?:\n+|$)/.exec(src)
-        if (!cap) return undefined
-        return {
-          type: 'heading',
-          raw: cap[0],
-          depth: cap[2].charAt(0) === '=' ? 1 : 2,
-          text: cap[1].trim(),
-          tokens: this.lexer.inline(cap[1].trim()),
-        }
+      lheading() {
+        return undefined
       },
     },
   })
+
+  function extractCodeLanguage(codeEl: Element | null): string {
+    const className = codeEl?.getAttribute('class') ?? ''
+    return className.match(/(?:^|\s)language-(\S+)/)?.[1] ?? ''
+  }
 
   let {
     workspaceId,
@@ -164,8 +162,9 @@
     const positions: number[] = []
     const links = markdownParser.lexer(text).links
     tree.iterate({ enter(node) {
-      if (!/^(ATX|Setext)Heading[1-6]$/.test(node.name)) return
-      const lexer = new Lexer()
+      if (node.name === 'Blockquote' || node.name === 'ListItem') return false
+      if (!/^ATXHeading[1-6]$/.test(node.name)) return
+      const lexer = new Lexer(markdownParser.defaults)
       lexer.tokens.links = links
       const html = markdownParser.parser(lexer.lex(view.state.sliceDoc(node.from, node.to)))
       const template = document.createElement('template')
@@ -218,8 +217,7 @@
     }
     for (const pre of template.content.querySelectorAll('pre')) {
       const code = pre.querySelector('code')
-      const langMatch = code?.className.match(/\blanguage-([\w+-]+)\b/)
-      const lang = langMatch?.[1] ?? ''
+      const lang = extractCodeLanguage(code)
       const wrapper = document.createElement('div')
       wrapper.className = 'read-code-block'
       const header = document.createElement('div')
@@ -285,7 +283,7 @@
 
   function highlightReadCodeBlocks(node: HTMLElement) {
     for (const codeEl of node.querySelectorAll<HTMLElement>('.read-code-block pre code')) {
-      const lang = codeEl.className.match(/\blanguage-([\w+-]+)\b/)?.[1] ?? ''
+      const lang = extractCodeLanguage(codeEl)
       if (lang) void highlightCodeElement(codeEl, lang).catch(console.error)
     }
   }

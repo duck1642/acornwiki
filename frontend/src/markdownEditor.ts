@@ -38,9 +38,9 @@ function createFoldMarker(open: boolean): HTMLElement {
 
 function wrapSelection(marker: string): (view: EditorView) => boolean {
   return (view) => {
+    if (view.state.readOnly) return false
     const length = marker.length
     const changes = view.state.changeByRange((range) => {
-      const selected = view.state.sliceDoc(range.from, range.to)
       const before = view.state.sliceDoc(Math.max(0, range.from - length), range.from)
       const after = view.state.sliceDoc(range.to, Math.min(view.state.doc.length, range.to + length))
       if (before === marker && after === marker) {
@@ -52,17 +52,31 @@ function wrapSelection(marker: string): (view: EditorView) => boolean {
           range: EditorSelection.range(range.from - length, range.to - length),
         }
       }
-      if (selected.startsWith(marker) && selected.endsWith(marker) && selected.length >= length * 2) {
-        const inner = selected.slice(length, -length)
-        return {
-          changes: { from: range.from, to: range.to, insert: inner },
-          range: EditorSelection.range(range.from, range.from + inner.length),
+      if (range.to - range.from >= length * 2) {
+        const start = view.state.sliceDoc(range.from, range.from + length)
+        const end = view.state.sliceDoc(range.to - length, range.to)
+        if (start === marker && end === marker) {
+          return {
+            changes: [
+              { from: range.from, to: range.from + length, insert: '' },
+              { from: range.to - length, to: range.to, insert: '' },
+            ],
+            range: EditorSelection.range(range.from, range.to - length * 2),
+          }
         }
       }
-      const wrapped = `${marker}${selected}${marker}`
+      if (range.empty) {
+        return {
+          changes: { from: range.from, to: range.to, insert: `${marker}${marker}` },
+          range: EditorSelection.cursor(range.from + length),
+        }
+      }
       return {
-        changes: { from: range.from, to: range.to, insert: wrapped },
-        range: EditorSelection.range(range.from + length, range.from + length + selected.length),
+        changes: [
+          { from: range.from, insert: marker },
+          { from: range.to, insert: marker },
+        ],
+        range: EditorSelection.range(range.from + length, range.to + length),
       }
     })
     view.dispatch(changes)
@@ -71,13 +85,21 @@ function wrapSelection(marker: string): (view: EditorView) => boolean {
 }
 
 function insertLink(view: EditorView): boolean {
+  if (view.state.readOnly) return false
   const changes = view.state.changeByRange((range) => {
-    const selected = view.state.sliceDoc(range.from, range.to)
-    const label = selected || 'link'
-    const insert = `[${label}](url)`
-    const urlStart = range.from + label.length + 3
+    if (range.empty) {
+      const urlStart = range.from + 7
+      return {
+        changes: { from: range.from, to: range.to, insert: '[link](url)' },
+        range: EditorSelection.range(urlStart, urlStart + 3),
+      }
+    }
+    const urlStart = range.to + 3
     return {
-      changes: { from: range.from, to: range.to, insert },
+      changes: [
+        { from: range.from, insert: '[' },
+        { from: range.to, insert: '](url)' },
+      ],
       range: EditorSelection.range(urlStart, urlStart + 3),
     }
   })
@@ -286,6 +308,16 @@ export function lineNumbersExtension(enabled: boolean): Extension {
   return enabled ? [lineNumbers(), highlightActiveLineGutter()] : []
 }
 
+const PLAIN_CODE_LANGUAGES = new Set(['text', 'plaintext', 'plain', 'txt', 'none', 'raw'])
+
+export function resolveCodeLanguage(info: string): LanguageDescription | null {
+  const token = info.trim().split(/\s+/)[0]
+  if (!token) return null
+  if (PLAIN_CODE_LANGUAGES.has(token.toLowerCase())) return null
+  return LanguageDescription.matchLanguageName(languages, token, false)
+    ?? (!token.includes('.') ? LanguageDescription.matchFilename(languages, `file.${token}`) : null)
+}
+
 export function createMarkdownEditorExtensions(extra: Extension[]): Extension[] {
   return [
     history(),
@@ -299,7 +331,7 @@ export function createMarkdownEditorExtensions(extra: Extension[]): Extension[] 
     highlightSelectionMatches(),
     foldGutter({ markerDOM: createFoldMarker }),
     search({ top: true }),
-    markdown({ base: markdownLanguage, codeLanguages: languages, extensions: [{ remove: ['SetextHeading'] }] }),
+    markdown({ base: markdownLanguage, codeLanguages: resolveCodeLanguage, extensions: [{ remove: ['SetextHeading'] }] }),
     syntaxHighlighting(markdownHighlightStyle),
     acornEditorTheme,
     EditorView.lineWrapping,
@@ -317,8 +349,7 @@ export function createMarkdownEditorExtensions(extra: Extension[]): Extension[] 
 }
 
 export async function highlightCodeElement(codeEl: HTMLElement, langName: string): Promise<void> {
-  if (!langName) return
-  const desc = LanguageDescription.matchLanguageName(languages, langName, true)
+  const desc = resolveCodeLanguage(langName)
   if (!desc) return
   const source = codeEl.textContent ?? ''
   if (!source) return

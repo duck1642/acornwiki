@@ -27,6 +27,8 @@ const net = require('node:net');
       executablePath: process.env.CHROME_PATH || 'C:/Program Files/Google/Chrome/Application/chrome.exe',
     });
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    const pageErrors = [];
+    page.on('pageerror', (err) => pageErrors.push(err));
     await page.addInitScript(() => {
       let releaseSettings;
       const settingsReady = new Promise((resolve) => { releaseSettings = resolve; });
@@ -36,10 +38,46 @@ const net = require('node:net');
       const notes = new Map([
         ['note.md', { content: '# Root\n\n## Child\n\n## Other\n\n```python\nprint(\'hi\')\n```', version: '1' }],
         ['other.md', { content: '# Second\n\n- First item\n-\n\nParagraph\n-', version: '1' }],
+        ['regressions.md', {
+          content: [
+            'Paragraph',
+            '- item',
+            '---',
+            '',
+            'Title',
+            '---',
+            '',
+            '> ## Same',
+            '',
+            '- ## Same',
+            '',
+            '## Same',
+            '',
+            '```c++',
+            'int x = 1;',
+            '```',
+            '',
+            '```c#',
+            'var x = 1;',
+            '```',
+            '',
+            '```f#',
+            'let x = 1',
+            '```',
+            '',
+            '```plaintext',
+            '\\section{not latex}',
+            '```',
+          ].join('\n'),
+          version: '1',
+        }],
+        ['crlf.md', { content: 'line1\r\nline2\r\nline3\r\nline4', version: '1' }],
       ]);
       const items = [
         { name: 'note.md', is_directory: false, modified_time: null },
         { name: 'other.md', is_directory: false, modified_time: null },
+        { name: 'regressions.md', is_directory: false, modified_time: null },
+        { name: 'crlf.md', is_directory: false, modified_time: null },
       ];
       const snap = () => ({
         workspace_id: 'w',
@@ -199,6 +237,46 @@ const net = require('node:net');
     await page.getByRole('button', { name: 'Medium', exact: true }).click();
     await page.waitForFunction(() => window.appearance.font_weights.body === 500);
     assert.equal(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--font-weight-body').trim()), '500');
+
+    // 7. Markdown regressions: no Setext block swallowing, nested heading jumpToHeading, code language labels/highlighting.
+    await page.getByRole('button', { name: 'regressions.md', exact: true }).click();
+    await page.locator('.note-panel[data-note-path="regressions.md"]:not(.inactive) .cm-content').waitFor();
+    assert.deepEqual(await page.locator('.note-outline a').allInnerTexts(), ['Same']);
+    // Jump from Contents in Source mode should focus editor on the top-level "## Same" despite quoted/list "## Same".
+    await page.locator('.note-outline a', { hasText: 'Same' }).click();
+    const activeLineText = await page.locator('.note-panel[data-note-path="regressions.md"] .cm-activeLine').innerText();
+    assert.equal(activeLineText.trim(), '## Same');
+    await page.locator('.note-panel[data-note-path="regressions.md"]').getByRole('button', { name: 'Read', exact: true }).click();
+    const readPanel = page.locator('.note-panel[data-note-path="regressions.md"] .note-read');
+    assert.equal(await readPanel.locator('hr').count(), 2);
+    assert.equal(await readPanel.locator('ul li').first().innerText(), 'item');
+    assert.deepEqual(
+      await readPanel.locator('.read-code-lang').allTextContents(),
+      ['c++', 'c#', 'f#', 'plaintext'],
+    );
+    // Wait for C++, C#, F# syntax highlighting and verify plaintext is NOT highlighted as LaTeX.
+    await readPanel.locator('.read-code-block').nth(0).locator('pre code .tok-typeName, pre code .tok-keyword, pre code .tok-number').first().waitFor();
+    await readPanel.locator('.read-code-block').nth(1).locator('pre code .tok-keyword, pre code .tok-number').first().waitFor();
+    await readPanel.locator('.read-code-block').nth(2).locator('pre code .tok-keyword, pre code .tok-number').first().waitFor();
+    await page.waitForTimeout(150);
+    assert.equal(await readPanel.locator('.read-code-block').nth(3).locator('pre code span[class^="tok-"]').count(), 0);
+
+    // 8. CRLF multiline shortcuts (Ctrl+B toggle and Ctrl+K link wrap) do not miscalculate offsets or throw.
+    await page.getByRole('button', { name: 'crlf.md', exact: true }).click();
+    const crlfEditor = page.locator('.note-panel[data-note-path="crlf.md"]:not(.inactive) .cm-content');
+    await crlfEditor.waitFor();
+    await crlfEditor.click();
+    await page.keyboard.press('Control+a');
+    await page.keyboard.press('Control+b');
+    assert.equal(await crlfEditor.innerText(), '**line1\nline2\nline3\nline4**');
+    // Toggle bold back off while selection is preserved across all 4 CRLF lines.
+    await page.keyboard.press('Control+b');
+    assert.equal(await crlfEditor.innerText(), 'line1\nline2\nline3\nline4');
+    // Wrap all 4 CRLF lines as a link and replace selected "url" by typing.
+    await page.keyboard.press('Control+k');
+    await page.keyboard.type('https://example.com');
+    assert.equal(await crlfEditor.innerText(), '[line1\nline2\nline3\nline4](https://example.com)');
+    assert.equal(pageErrors.length, 0, `Unexpected page errors: ${pageErrors.map((e) => e.message).join('; ')}`);
 
     console.log('headless settings and outline checks passed');
   } finally {
