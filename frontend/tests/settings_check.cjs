@@ -78,12 +78,14 @@ const net = require('node:net');
           version: '1',
         }],
         ['crlf.md', { content: 'line1\r\nline2\r\nline3\r\nline4', version: '1' }],
+        ['parser-edge.md', { content: '# Start\n\nAlpha\n-\tBeta\n---\n\n<pre>raw line one\nraw line two</pre>', version: '1' }],
       ]);
       const items = [
         { name: 'note.md', is_directory: false, modified_time: null },
         { name: 'other.md', is_directory: false, modified_time: null },
         { name: 'regressions.md', is_directory: false, modified_time: null },
         { name: 'crlf.md', is_directory: false, modified_time: null },
+        { name: 'parser-edge.md', is_directory: false, modified_time: null },
       ];
       const snap = () => ({
         workspace_id: 'w',
@@ -291,6 +293,16 @@ const net = require('node:net');
     await page.keyboard.press('Control+k');
     await page.keyboard.type('https://example.com');
     assert.equal(await crlfEditor.innerText(), '[line1\nline2\nline3\nline4](https://example.com)');
+
+    // Marked and CodeMirror can parse Setext differently; navigation follows the rendered heading.
+    await page.getByRole('button', { name: 'parser-edge.md', exact: true }).click();
+    const edgePanel = page.locator('.note-panel[data-note-path="parser-edge.md"]');
+    await edgePanel.locator('.cm-content').waitFor();
+    await page.locator('.note-outline a', { hasText: 'Alpha' }).click();
+    assert.equal((await edgePanel.locator('.cm-activeLine').innerText()).trim(), 'Alpha');
+    await edgePanel.getByRole('button', { name: 'Read', exact: true }).click();
+    await edgePanel.locator('.read-code-copy').click();
+    assert.equal(await page.evaluate(() => window.copiedText), 'raw line one\nraw line two');
     assert.equal(pageErrors.length, 0, `Unexpected page errors: ${pageErrors.map((e) => e.message).join('; ')}`);
 
     console.log('headless settings and outline checks passed');

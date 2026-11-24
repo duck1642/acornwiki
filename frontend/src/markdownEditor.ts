@@ -3,6 +3,7 @@ import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirro
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import {
   bracketMatching,
+  ensureSyntaxTree,
   foldGutter,
   foldKeymap,
   HighlightStyle,
@@ -36,33 +37,65 @@ function createFoldMarker(open: boolean): HTMLElement {
   return wrapper
 }
 
+type MarkerPositions = { opening: number; closing: number }
+
+function resolveItalicMarkers(
+  state: EditorState,
+  from: number,
+  to: number,
+  markers: MarkerPositions,
+): MarkerPositions | null {
+  const { opening, closing } = markers
+  if (opening + 1 === closing) return markers
+  const isStar = (pos: number) => pos >= 0 && pos < state.doc.length && state.sliceDoc(pos, pos + 1) === '*'
+  if (![opening - 1, opening + 1, closing - 1, closing + 1].some(isStar)) return markers
+
+  // Markdown can assign adjacent stars to distinct emphasis and strong emphasis nodes.
+  const tree = ensureSyntaxTree(state, to)
+  for (let node = tree?.resolveInner(from, 1) ?? null; node; node = node.parent) {
+    if (node.name !== 'Emphasis') continue
+    const open = node.firstChild
+    const close = node.lastChild
+    if (open?.name !== 'EmphasisMark' || close?.name !== 'EmphasisMark') continue
+    if (!isStar(open.from) || !isStar(close.from)) continue
+    const includesMarkers = open.from === from && close.to === to
+    const betweenMarkers = open.to <= from && to <= close.from
+      && /^\**$/.test(state.sliceDoc(open.to, from)) && /^\**$/.test(state.sliceDoc(to, close.from))
+    if (includesMarkers || betweenMarkers) return { opening: open.from, closing: close.from }
+  }
+  return null
+}
+
 function wrapSelection(marker: string): (view: EditorView) => boolean {
   return (view) => {
     if (view.state.readOnly) return false
     const length = marker.length
-    const changes = view.state.changeByRange((range) => {
-      const before = view.state.sliceDoc(Math.max(0, range.from - length), range.from)
-      const after = view.state.sliceDoc(range.to, Math.min(view.state.doc.length, range.to + length))
+    const { state } = view
+    const changes = state.changeByRange((range) => {
+      const before = state.sliceDoc(Math.max(0, range.from - length), range.from)
+      const after = state.sliceDoc(range.to, Math.min(state.doc.length, range.to + length))
+      let markers: MarkerPositions | null = null
       if (before === marker && after === marker) {
-        return {
-          changes: [
-            { from: range.from - length, to: range.from, insert: '' },
-            { from: range.to, to: range.to + length, insert: '' },
-          ],
-          range: EditorSelection.range(range.from - length, range.to - length),
+        markers = { opening: range.from - length, closing: range.to }
+      } else if (range.to - range.from >= length * 2) {
+        const start = state.sliceDoc(range.from, range.from + length)
+        const end = state.sliceDoc(range.to - length, range.to)
+        if (start === marker && end === marker) {
+          markers = { opening: range.from, closing: range.to - length }
         }
       }
-      if (range.to - range.from >= length * 2) {
-        const start = view.state.sliceDoc(range.from, range.from + length)
-        const end = view.state.sliceDoc(range.to - length, range.to)
-        if (start === marker && end === marker) {
-          return {
-            changes: [
-              { from: range.from, to: range.from + length, insert: '' },
-              { from: range.to - length, to: range.to, insert: '' },
-            ],
-            range: EditorSelection.range(range.from, range.to - length * 2),
-          }
+      if (markers && marker === '*' && !range.empty) {
+        markers = resolveItalicMarkers(state, range.from, range.to, markers)
+      }
+      if (markers) {
+        const { opening, closing } = markers
+        const changes = state.changes([
+          { from: opening, to: opening + length },
+          { from: closing, to: closing + length },
+        ])
+        return {
+          changes,
+          range: EditorSelection.range(changes.mapPos(range.from), changes.mapPos(range.to)),
         }
       }
       if (range.empty) {
@@ -114,7 +147,7 @@ const markdownShortcuts = [
   { key: 'Mod-k', run: insertLink },
 ]
 
-export const markdownHighlightStyle = HighlightStyle.define([
+const markdownHighlightStyle = HighlightStyle.define([
   { tag: tags.heading1, color: 'var(--ink)', fontWeight: '700', fontSize: '1.58em', lineHeight: '1.35' },
   { tag: tags.heading2, color: 'var(--ink)', fontWeight: '700', fontSize: '1.3em', lineHeight: '1.4' },
   { tag: tags.heading3, color: 'var(--ink)', fontWeight: '650', fontSize: '1.14em', lineHeight: '1.45' },
@@ -140,7 +173,7 @@ export const markdownHighlightStyle = HighlightStyle.define([
   { tag: [tags.invalid], color: 'var(--error)' },
 ])
 
-export const acornEditorTheme = EditorView.theme({
+const acornEditorTheme = EditorView.theme({
   '&': {
     color: 'var(--ink)',
     backgroundColor: 'transparent',
@@ -310,7 +343,7 @@ export function lineNumbersExtension(enabled: boolean): Extension {
 
 const PLAIN_CODE_LANGUAGES = new Set(['text', 'plaintext', 'plain', 'txt', 'none', 'raw'])
 
-export function resolveCodeLanguage(info: string): LanguageDescription | null {
+function resolveCodeLanguage(info: string): LanguageDescription | null {
   const token = info.trim().split(/\s+/)[0]
   if (!token) return null
   if (PLAIN_CODE_LANGUAGES.has(token.toLowerCase())) return null

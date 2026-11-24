@@ -2,13 +2,13 @@
   import { onMount, tick, untrack } from 'svelte'
   import { Compartment, EditorState } from '@codemirror/state'
   import { EditorView } from '@codemirror/view'
-  import { ensureSyntaxTree } from '@codemirror/language'
-  import { Lexer, Marked } from 'marked'
+  import { Marked } from 'marked'
   import DOMPurify from 'dompurify'
   import Icon from './Icon.svelte'
   import PopupMenu from './PopupMenu.svelte'
   import { openWorkspaceFile } from './fileActions'
   import { createMarkdownEditorExtensions, highlightCodeElement, lineNumbersExtension } from './markdownEditor'
+  import { noteLineEndings, noteText } from './noteLineEndings'
   import type { EditorPreferences, EditorStatus, FlatOutlineHeading } from './sharedTypes'
 
   const markdownParser = new Marked()
@@ -149,21 +149,21 @@
       return
     }
     const heading = outline.find((item) => item.id === id)
-    const tree = ensureSyntaxTree(view.state, view.state.doc.length, 1000)
-    if (!tree || !heading) return
+    if (!heading) return
     const positions: number[] = []
-    const links = markdownParser.lexer(text).links
-    tree.iterate({ enter(node) {
-      if (node.name === 'Blockquote' || node.name === 'ListItem') return false
-      if (!/^(ATX|Setext)Heading[1-6]$/.test(node.name)) return
-      const lexer = new Lexer(markdownParser.defaults)
-      lexer.tokens.links = links
-      const html = markdownParser.parser(lexer.lex(view.state.sliceDoc(node.from, node.to)))
-      const template = document.createElement('template')
-      template.innerHTML = DOMPurify.sanitize(html)
-      const parsed = template.content.querySelector('h1,h2,h3,h4,h5,h6')
-      if (parsed?.textContent?.trim() === heading.label && Number(parsed.tagName.slice(1)) === heading.level) positions.push(node.from)
-    } })
+    // Use the same parser as Read so both modes agree on where a heading starts.
+    // CodeMirror positions count normalized line breaks as one character.
+    const tokens = markdownParser.lexer(view.state.doc.toString())
+    let offset = 0
+    for (const token of tokens) {
+      if (token.type === 'heading') {
+        const template = document.createElement('template')
+        template.innerHTML = DOMPurify.sanitize(markdownParser.parser([token]))
+        const parsed = template.content.querySelector('h1,h2,h3,h4,h5,h6')
+        if (parsed?.textContent?.trim() === heading.label && Number(parsed.tagName.slice(1)) === heading.level) positions.push(offset)
+      }
+      offset += token.raw.length
+    }
     const matches = outline.filter((item) => item.label === heading.label && item.level === heading.level)
     // Avoid jumping to the wrong heading if raw HTML produced an indistinguishable entry.
     if (matches.length !== positions.length) return
@@ -233,7 +233,9 @@
     const copyButton = element.closest<HTMLButtonElement>('.read-code-copy')
     if (copyButton && event.type === 'click') {
       event.preventDefault()
-      const textToCopy = (copyButton.closest('.read-code-block')?.querySelector('pre code')?.textContent ?? '').replace(/\r?\n$/, '')
+      const pre = copyButton.closest('.read-code-block')?.querySelector('pre')
+      const code = pre?.querySelector('code')
+      const textToCopy = code ? (code.textContent ?? '').replace(/\r?\n$/, '') : (pre?.textContent ?? '')
       try {
         await navigator.clipboard.writeText(textToCopy)
         copyButton.textContent = 'Copied'
@@ -309,19 +311,19 @@
   }
 
   function setDocument(content: string) {
-    const lineSeparator = content.includes('\r\n') ? '\r\n' : '\n'
-    view.setState(EditorState.create({ doc: content, extensions: [...extensions(), EditorState.lineSeparator.of(lineSeparator)] }))
+    view.setState(EditorState.create({ doc: content, extensions: extensions(content) }))
     text = content
   }
 
-  function extensions() {
+  function extensions(content = '') {
     return createMarkdownEditorExtensions([
+      noteLineEndings(content),
       lineNumbersCompartment.of(lineNumbersExtension(showLineNumbers)),
       editableCompartment.of(EditorView.editable.of(!prompt && !freezeEditors)),
       readOnlyCompartment.of(EditorState.readOnly.of(prompt || freezeEditors)),
       EditorView.updateListener.of((update) => {
         if (update.docChanged) {
-          text = update.state.sliceDoc()
+          text = noteText(update.state)
           message = ''
           scheduleSave()
         }
