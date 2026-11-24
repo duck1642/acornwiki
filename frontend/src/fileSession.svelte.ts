@@ -1,3 +1,4 @@
+import type { DocumentLoadReason } from './editorCore'
 import type { EditorPreferences, EditorStatus, LoadedFileSnapshot } from './sharedTypes'
 
 export type FileReadOutcome =
@@ -10,7 +11,7 @@ export type FileSessionOptions = {
   save: (path: string, content: string, expectedVersion: string, hasBom: boolean) => Promise<LoadedFileSnapshot>
   getPreferences: () => EditorPreferences
   getFreezeEditors: () => boolean
-  onDocumentLoaded: (content: string) => void
+  onDocumentLoaded: (content: string, reason: DocumentLoadReason) => void
   onInitialLoadFinished?: () => void
   initialSnapshot?: LoadedFileSnapshot
   entityLabel?: 'note' | 'file'
@@ -62,7 +63,7 @@ export class FileSession {
       this.savedText = initial.content
       this.hasBom = Boolean(initial.has_bom)
       this.text = initial.content
-      this.options.onDocumentLoaded(initial.content)
+      this.options.onDocumentLoaded(initial.content, 'initial')
       this.conflict = false
       this.missing = false
       this.message = ''
@@ -173,7 +174,7 @@ export class FileSession {
       this.savedText = file.content
       this.hasBom = Boolean(file.has_bom)
       this.text = file.content
-      this.options.onDocumentLoaded(file.content)
+      this.options.onDocumentLoaded(file.content, 'initial')
       this.conflict = false
       this.missing = false
       this.message = ''
@@ -301,7 +302,7 @@ export class FileSession {
         this.savedText = file.content
         this.hasBom = Boolean(file.has_bom)
         this.text = file.content
-        this.options.onDocumentLoaded(file.content)
+        this.options.onDocumentLoaded(file.content, 'reload')
         this.conflict = false
         this.message = prefs.reload_notice ? 'File changed externally and was reloaded.' : ''
       } else {
@@ -330,7 +331,7 @@ export class FileSession {
     this.savedText = this.diskText
     this.hasBom = this.diskHasBom
     this.text = this.diskText
-    this.options.onDocumentLoaded(this.diskText)
+    this.options.onDocumentLoaded(this.diskText, 'reload')
     this.conflict = false
     this.message = 'Loaded the version on disk.'
   }

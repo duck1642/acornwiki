@@ -11,7 +11,7 @@ import {
 } from '@codemirror/language'
 import { languages } from '@codemirror/language-data'
 import { highlightSelectionMatches, search, searchKeymap } from '@codemirror/search'
-import { EditorState, type Extension } from '@codemirror/state'
+import { EditorSelection, EditorState, type Extension } from '@codemirror/state'
 import {
   drawSelection,
   dropCursor,
@@ -272,6 +272,53 @@ export function isClickOnScrollbar(event: MouseEvent, container: HTMLElement): b
   const onHorizontal = container.scrollWidth > container.clientWidth
     && event.clientY >= rect.top + container.clientHeight
   return onVertical || onHorizontal
+}
+
+export type DocumentLoadReason = 'initial' | 'reload'
+
+export function replaceEditorDocument(
+  view: EditorView,
+  content: string,
+  extensions: Extension,
+  reason: DocumentLoadReason,
+  outerScrollContainer?: HTMLElement | null,
+): void {
+  if (reason === 'initial') {
+    view.setState(EditorState.create({ doc: content, extensions }))
+    return
+  }
+  // External reloads intentionally create a fresh EditorState so undo history resets,
+  // while preserving cursor line/column (clamped to the new document) and scroll position.
+  const prevDoc = view.state.doc
+  const prevMain = view.state.selection.main
+  const anchorLine = prevDoc.lineAt(prevMain.anchor)
+  const headLine = prevDoc.lineAt(prevMain.head)
+  const anchorPos = { line: anchorLine.number, col: prevMain.anchor - anchorLine.from }
+  const headPos = { line: headLine.number, col: prevMain.head - headLine.from }
+  const viewScrollTop = view.scrollDOM.scrollTop
+  const viewScrollLeft = view.scrollDOM.scrollLeft
+  const outerScrollTop = outerScrollContainer?.scrollTop ?? 0
+  const outerScrollLeft = outerScrollContainer?.scrollLeft ?? 0
+
+  const nextState = EditorState.create({ doc: content, extensions })
+  const clampLineCol = (pos: { line: number; col: number }) => {
+    const line = nextState.doc.line(Math.min(pos.line, nextState.doc.lines))
+    return Math.min(line.from + pos.col, line.to)
+  }
+  const selection = EditorSelection.single(clampLineCol(anchorPos), clampLineCol(headPos))
+  view.setState(nextState.update({ selection }).state)
+
+  const restoreScroll = () => {
+    if (!view.dom.isConnected) return
+    view.scrollDOM.scrollTop = viewScrollTop
+    view.scrollDOM.scrollLeft = viewScrollLeft
+    if (outerScrollContainer && outerScrollContainer !== view.scrollDOM) {
+      outerScrollContainer.scrollTop = outerScrollTop
+      outerScrollContainer.scrollLeft = outerScrollLeft
+    }
+  }
+  restoreScroll()
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(restoreScroll)
 }
 
 export function createBaseEditorExtensions(

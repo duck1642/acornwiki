@@ -6,7 +6,7 @@
   import DOMPurify from 'dompurify'
   import Icon from './Icon.svelte'
   import PopupMenu from './PopupMenu.svelte'
-  import { buildBreadcrumb, isClickOnScrollbar } from './editorCore'
+  import { buildBreadcrumb, isClickOnScrollbar, replaceEditorDocument, type DocumentLoadReason } from './editorCore'
   import { FileSession } from './fileSession.svelte'
   import {
     createMarkdownEditorExtensions,
@@ -88,8 +88,8 @@
     },
     getPreferences: () => editorPreferences,
     getFreezeEditors: () => freezeEditors,
-    onDocumentLoaded: (content) => {
-      setDocument(content)
+    onDocumentLoaded: (content, reason) => {
+      setDocument(content, reason)
     },
     onInitialLoadFinished: () => {
       outlineReady = true
@@ -315,8 +315,9 @@
     view.focus()
   }
 
-  function setDocument(content: string) {
-    view.setState(EditorState.create({ doc: content, extensions: extensions(content) }))
+  function setDocument(content: string, reason: DocumentLoadReason) {
+    const outerScroller = panel?.querySelector<HTMLElement>('.note-scroll') ?? null
+    replaceEditorDocument(view, content, extensions(content), reason, outerScroller)
   }
 
   function extensions(content = '') {

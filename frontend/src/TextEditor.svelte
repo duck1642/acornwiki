@@ -10,8 +10,10 @@
     createBaseEditorExtensions,
     isClickOnScrollbar,
     lineNumbersExtension,
+    replaceEditorDocument,
     resolveLanguageByFilename,
     wordWrapExtension,
+    type DocumentLoadReason,
   } from './editorCore'
   import { FileSession } from './fileSession.svelte'
   import { noteLineEndings, noteText } from './noteLineEndings'
@@ -96,8 +98,8 @@
     },
     getPreferences: () => editorPreferences,
     getFreezeEditors: () => freezeEditors,
-    onDocumentLoaded: (content) => {
-      setDocument(content)
+    onDocumentLoaded: (content, reason) => {
+      setDocument(content, reason)
     },
   })
 
@@ -137,8 +139,8 @@
     currentView.dispatch({ effects: wordWrapCompartment.reconfigure(wordWrapExtension(enabled)) })
   })
 
-  function setDocument(content: string) {
-    view.setState(EditorState.create({ doc: content, extensions: extensions(content) }))
+  function setDocument(content: string, reason: DocumentLoadReason) {
+    replaceEditorDocument(view, content, extensions(content), reason)
   }
 
   function extensions(content = '') {

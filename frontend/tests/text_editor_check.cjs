@@ -308,12 +308,26 @@ const net = require('node:net');
     await cmakePanel.waitFor();
     assert.equal(await cmakePanel.locator('.text-editor-lang').innerText(), 'CMake');
 
-    // 9. Clean file Ctrl+S after silent external edit auto-reloads instead of creating a manual conflict (#7).
-    await page.evaluate(() => window.externalText('CMakeLists.txt', 'project(demo)\n', false));
+    // 9. Clean file Ctrl+S after silent external edit auto-reloads cleanly: resets undo history while preserving scroll (#7, #18).
+    const longLines = Array.from({ length: 120 }, (_, i) => `set(VAR_${i} "value_${i}")`).join('\n');
+    await page.evaluate((text) => window.externalText('CMakeLists.txt', text, true), longLines);
+    await cmakePanel.getByText('File changed externally and was reloaded.').waitFor();
     await cmakePanel.locator('.cm-content').click();
+    await page.keyboard.press('Control+End');
+    await page.keyboard.type('\n# saved edit');
+    await page.keyboard.press('Control+s');
+    await page.waitForFunction(() => window.savedTextCalls.some((c) => c.filePath === 'CMakeLists.txt'));
+    await cmakePanel.locator('.cm-scroller').evaluate((el) => { el.scrollTop = 420; });
+    const scrollBeforeReload = await cmakePanel.locator('.cm-scroller').evaluate((el) => el.scrollTop);
+    await page.evaluate((text) => window.externalText('CMakeLists.txt', text, false), `${longLines}\n# silent update`);
     await page.keyboard.press('Control+s');
     await cmakePanel.getByText('File changed externally and was reloaded.').waitFor();
-    assert.equal((await cmakePanel.locator('.cm-content').innerText()).trim(), 'project(demo)');
+    assert.ok((await cmakePanel.locator('.cm-content').innerText()).includes('# silent update'));
+    // Undo history was explicitly cleared on external reload, so Ctrl+Z must not revert the reloaded text.
+    await page.keyboard.press('Control+z');
+    assert.ok((await cmakePanel.locator('.cm-content').innerText()).includes('# silent update'));
+    const scrollAfterReload = await cmakePanel.locator('.cm-scroller').evaluate((el) => el.scrollTop);
+    assert.ok(Math.abs(scrollAfterReload - scrollBeforeReload) < 40, `Expected scroll near ${scrollBeforeReload}, got ${scrollAfterReload}`);
 
     // 10. Conflict action buttons disable while overwrite save is in flight (#12).
     await cmakePanel.locator('.cm-content').click();
