@@ -54,13 +54,15 @@ class SortOptionsTests(unittest.TestCase):
         self.assertEqual([item["name"] for item in sort_items(items, "alphabetic_desc")], ["z-folder", "a-folder", "z.md", "a.md"])
 
     def test_bridge_sorts_without_an_open_note(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            bridge = Bridge()
-            self.addCleanup(bridge._close)
-            workspace_id = bridge.open_workspace(temporary)["workspace_id"]
-            for mode in ("alphabetic", "alphabetic_desc", "modified", "modified_asc", "created", "created_asc"):
-                with self.subTest(mode=mode):
-                    self.assertEqual(bridge.set_tree_sort(workspace_id, mode)["workspace_id"], workspace_id)
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        bridge = Bridge()
+        # Close the watcher before deleting the directory it watches.
+        self.addCleanup(bridge._close)
+        workspace_id = bridge.open_workspace(temporary.name)["workspace_id"]
+        for mode in ("alphabetic", "alphabetic_desc", "modified", "modified_asc", "created", "created_asc"):
+            with self.subTest(mode=mode):
+                self.assertEqual(bridge.set_tree_sort(workspace_id, mode)["workspace_id"], workspace_id)
 
     def test_all_six_sort_orders(self) -> None:
         items: list[FileTreeItem] = [

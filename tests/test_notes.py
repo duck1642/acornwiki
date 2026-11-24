@@ -1,5 +1,6 @@
 """Exercise note boundaries, version conflicts, and safe replacement."""
 
+import hashlib
 import os
 import stat
 import tempfile
@@ -467,9 +468,19 @@ class NoteTests(unittest.TestCase):
         target.write_bytes(b"small")
         version = read_text_file(self.root, "grown.txt")["version"]
         target.write_bytes(b"x" * (3 * 1024 * 1024))
-        with self.assertRaises(NoteConflictError):
-            save_text_file(self.root, "grown.txt", "local", version)
+        with patch.object(Path, "read_bytes", side_effect=AssertionError("Version check must stream the file")):
+            with self.assertRaises(NoteConflictError):
+                save_text_file(self.root, "grown.txt", "local", version)
         self.assertEqual(target.stat().st_size, 3 * 1024 * 1024)
+
+    def test_save_hashes_existing_file_once(self) -> None:
+        target = self.root / "once.txt"
+        target.write_bytes(b"original")
+        version = read_text_file(self.root, "once.txt")["version"]
+        with patch("backend.modules.notes.hashlib.file_digest", wraps=hashlib.file_digest) as digest:
+            save_text_file(self.root, "once.txt", "updated", version)
+        self.assertEqual(digest.call_count, 1)
+        self.assertEqual(target.read_bytes(), b"updated")
 
     def test_bridge_text_file_api_and_commit_move_rebases_open_files(self) -> None:
         class TestWindow:

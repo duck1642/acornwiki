@@ -272,9 +272,6 @@ def _save_workspace_bytes(
     path: Path, data: bytes, expected_version: str, label: str = "File"
 ) -> str:
     """Replace an unchanged workspace file atomically using a nearby temporary file."""
-    current_version, _ = _file_version_and_mode(path, label)
-    if current_version != expected_version:
-        raise NoteConflictError(f"{label} changed on disk")
     temporary: str | None = None
     try:
         # A failed temporary write cannot truncate the existing file.
