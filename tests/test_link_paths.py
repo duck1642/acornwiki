@@ -14,6 +14,7 @@ from backend.modules.link_paths import (
 )
 from backend.modules.notes import (
     NoteConflictError,
+    NoteVersion,
     list_markdown_notes,
     read_note,
     read_note_batch,
@@ -92,7 +93,7 @@ class LinkPathTests(unittest.TestCase):
             (root / "b.md").write_text("b", encoding="utf-8")
             first = read_note(root, "a.md")
             second = read_note(root, "b.md")
-            snapshots = [
+            snapshots: list[NoteVersion] = [
                 {"path": n["path"], "version": n["version"]} for n in (first, second)
             ]
             versions = validate_note_scan(root, snapshots)

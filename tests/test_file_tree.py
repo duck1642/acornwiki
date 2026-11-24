@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from backend.app.bridge import Bridge
 from backend.modules.notes import (
+    UTF8_BOM,
     NoteConflictError,
     NoteSnapshot,
     NoteVersion,
@@ -196,6 +197,22 @@ class MoveCommitTests(unittest.TestCase):
         self.assertEqual((self.root / "New.MD").read_bytes(), b"old")
         self.assertEqual(link.read_bytes(), b"[link](old.md?version=1)")
 
+    def test_move_link_rewrite_preserves_note_bom(self) -> None:
+        (self.root / "old.png").write_bytes(b"image")
+        note = self.root / "link.md"
+        note.write_bytes(UTF8_BOM + b"[image](old.png)\r\n")
+        snapshot = self.bridge.read_note(self.workspace, note.name)
+        rewrite: NoteSnapshot = {**snapshot, "content": "[image](new.png)\r\n"}
+
+        result = self.bridge.commit_move(
+            self.workspace, "old.png", "new.png", self.versions(), [rewrite]
+        )
+
+        self.assertEqual(
+            result, {"destination": "new.png", "updated": ["link.md"], "failures": []}
+        )
+        self.assertEqual(note.read_bytes(), UTF8_BOM + b"[image](new.png)\r\n")
+
     def test_failure_after_rename_reports_the_note_and_continues(self) -> None:
         (self.root / "old.png").write_bytes(b"image")
         (self.root / "a.md").write_bytes(b"[image](old.png)")
@@ -206,11 +223,11 @@ class MoveCommitTests(unittest.TestCase):
         ]
 
         def save_with_external_edit(
-            root: Path, path: str, content: str, version: str
+            root: Path, path: str, content: str, version: str, has_bom: bool
         ) -> NoteSnapshot:
             if path == "a.md":
                 (root / path).write_bytes(b"external edit")
-            return save_note(root, path, content, version)
+            return save_note(root, path, content, version, has_bom)
 
         with patch("backend.app.bridge.save_note", side_effect=save_with_external_edit):
             result = self.bridge.commit_move(

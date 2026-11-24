@@ -11,12 +11,16 @@ from urllib.request import urlopen
 
 from backend.app.bridge import Bridge, SharedState
 from backend.modules.notes import (
+    TEXT_FILE_MAX_BYTES,
+    UTF8_BOM,
     NoteConflictError,
     list_markdown_notes,
     markdown_name,
     read_note,
+    read_text_file,
     resolve_note_link,
     save_note,
+    save_text_file,
 )
 from backend.services.media import MediaServer
 
@@ -263,3 +267,137 @@ class NoteTests(unittest.TestCase):
 
         self.assertEqual(len(bridge._open_notes), 1)
         self.assertTrue(bridge._open_notes_registered)
+
+    def test_note_bom_is_stripped_preserved_and_versioned(self) -> None:
+        self.path.write_bytes(UTF8_BOM + b"# Title\r\n")
+        note = read_note(self.root, "note.md")
+        self.assertEqual(note["content"], "# Title\r\n")
+        self.assertTrue(note.get("has_bom"))
+        saved = save_note(
+            self.root, "note.md", "# Edited\r\n", note["version"], has_bom=True
+        )
+        self.assertTrue(saved.get("has_bom"))
+        self.assertEqual(self.path.read_bytes(), UTF8_BOM + b"# Edited\r\n")
+        self.path.write_bytes(b"# Edited\r\n")
+        with self.assertRaises(NoteConflictError):
+            save_note(
+                self.root, "note.md", "# Local\r\n", saved["version"], has_bom=True
+            )
+
+    def test_text_file_read_save_bom_and_conflict(self) -> None:
+        script = self.root / "helper.py"
+        script.write_bytes(UTF8_BOM + b"print('hi')\r\n")
+        makefile = self.root / "Makefile"
+        makefile.write_bytes(b"all:\n\techo ok\n")
+
+        loaded = read_text_file(self.root, "helper.py")
+        assert loaded["ok"] is True, loaded
+        self.assertEqual(loaded["content"], "print('hi')\r\n")
+        self.assertTrue(loaded["has_bom"])
+
+        saved = save_text_file(
+            self.root, "helper.py", "print('bye')\r\n", loaded["version"], has_bom=True
+        )
+        self.assertEqual(script.read_bytes(), UTF8_BOM + b"print('bye')\r\n")
+        self.assertTrue(saved["has_bom"])
+
+        script.write_bytes(b"print('bye')\r\n")
+        with self.assertRaises(NoteConflictError):
+            save_text_file(
+                self.root,
+                "helper.py",
+                "print('next')\r\n",
+                saved["version"],
+                has_bom=True,
+            )
+
+        loaded_make = read_text_file(self.root, "Makefile")
+        assert loaded_make["ok"] is True, loaded_make
+        self.assertFalse(loaded_make["has_bom"])
+        self.assertEqual(loaded_make["content"], "all:\n\techo ok\n")
+        with self.assertRaises(ValueError):
+            read_text_file(self.root, "../outside.py")
+        with self.assertRaises(ValueError):
+            save_text_file(self.root, "../outside.py", "x", "v")
+
+    def test_text_file_rejects_binary_encoding_and_oversized(self) -> None:
+        binary = self.root / "blob.dat"
+        binary.write_bytes(b"abc\x00def")
+        binary_res = read_text_file(self.root, "blob.dat")
+        assert binary_res["ok"] is False
+        self.assertEqual(binary_res["reason"], "binary")
+
+        bad_utf8 = self.root / "latin1.txt"
+        bad_utf8.write_bytes(b"caf\xe9")
+        enc_res = read_text_file(self.root, "latin1.txt")
+        assert enc_res["ok"] is False
+        self.assertEqual(enc_res["reason"], "unsupported_encoding")
+        self.assertEqual(bad_utf8.read_bytes(), b"caf\xe9")
+
+        large = self.root / "large.log"
+        large.write_bytes(b"a" * 32)
+        large_res = read_text_file(self.root, "large.log", max_bytes=16)
+        assert large_res["ok"] is False
+        self.assertEqual(large_res["reason"], "too_large")
+        self.assertEqual(large_res["size_bytes"], 32)
+        self.assertEqual(large_res["max_bytes"], 16)
+
+    def test_text_file_save_enforces_utf8_byte_limit_and_rejects_nul(self) -> None:
+        path = self.root / "script.py"
+        path.write_bytes(UTF8_BOM + b"initial")
+        loaded = read_text_file(self.root, path.name)
+        assert loaded["ok"] is True, loaded
+
+        prefix = "é"
+        padding = TEXT_FILE_MAX_BYTES - len(UTF8_BOM) - len(prefix.encode("utf-8"))
+        content = prefix + ("a" * padding)
+        saved = save_text_file(
+            self.root, path.name, content, loaded["version"], has_bom=True
+        )
+        reread = read_text_file(self.root, path.name)
+        assert reread["ok"] is True, reread
+        self.assertEqual(reread["size_bytes"], TEXT_FILE_MAX_BYTES)
+        self.assertEqual(reread["version"], saved["version"])
+
+        with self.assertRaisesRegex(ValueError, "byte limit"):
+            save_text_file(
+                self.root, path.name, content + "x", saved["version"], has_bom=True
+            )
+        with self.assertRaisesRegex(ValueError, "NUL"):
+            save_text_file(
+                self.root, path.name, "text\x00more", saved["version"], has_bom=True
+            )
+        self.assertEqual(path.read_bytes(), UTF8_BOM + content.encode("utf-8"))
+
+    def test_open_files_watch_non_markdown_while_link_scans_ignore_them(self) -> None:
+        class TestWindow:
+            def __init__(self) -> None:
+                self.values: dict[str, int] = {}
+                self.state: SharedState = self.values
+
+            def destroy(self) -> None:
+                pass
+
+        script = self.root / "tool.py"
+        script.write_text("x = 1\n", encoding="utf-8")
+        batch = self.root / "run.bat"
+        batch.write_text("@echo off\r\n", encoding="utf-8")
+
+        self.assertEqual(list_markdown_notes(self.root), ["note.md"])
+
+        bridge = Bridge()
+        self.addCleanup(bridge._close)
+        window = TestWindow()
+        bridge._attach_window(window)
+        workspace = bridge.open_workspace(str(self.root))["workspace_id"]
+
+        bridge.set_open_files(workspace, ["note.md", "tool.py", "run.bat"])
+        bridge._note_changed(script)
+        deadline = time.monotonic() + 3
+        while "note_revision" not in window.values and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertIn("note_revision", window.values)
+
+        with self.assertRaises(ValueError):
+            bridge.set_open_files(workspace, ["../outside.py"])
+        self.assertEqual(len(bridge._open_notes), 3)

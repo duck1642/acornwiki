@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",
-    "test:editor": "node tests/markdown_editor_shortcuts.mjs && node tests/note_line_endings.mjs && node tests/note_check.cjs"
+    "test:editor": "node tests/markdown_editor_shortcuts.mjs && node tests/note_line_endings.mjs && node tests/note_check.cjs",
+    "test:text": "node tests/text_editor_check.cjs"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.3.1",

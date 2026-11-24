@@ -21,15 +21,20 @@ from backend.modules.notes import (
     NoteConflictError,
     NoteSnapshot,
     NoteVersion,
+    TextFileReadResult,
+    TextFileSnapshot,
     list_markdown_notes,
     markdown_name,
     note_path,
     read_note,
     read_note_batch,
+    read_text_file,
     resolve_note_link,
     save_note,
+    save_text_file,
     validate_note_rewrites,
     validate_note_scan,
+    workspace_file_path,
 )
 from backend.services.filesystem import FileTree, TreeSnapshot
 
@@ -260,6 +265,10 @@ class Bridge:
         with self._lock:
             return read_note(self._require_tree(workspace_id).root, path)
 
+    def read_text_file(self, workspace_id: str, path: str) -> TextFileReadResult:
+        with self._lock:
+            return read_text_file(self._require_tree(workspace_id).root, path)
+
     def list_plan_notes(self, workspace_id: str) -> list[str]:
         """List Markdown files to inspect while planning a move."""
         with self._lock:
@@ -387,7 +396,13 @@ class Bridge:
                         raise NoteConflictError(
                             "Note path changed to a link or junction"
                         )
-                    save_note(tree.root, path, note["content"], note["version"])
+                    save_note(
+                        tree.root,
+                        path,
+                        note["content"],
+                        note["version"],
+                        note.get("has_bom", False),
+                    )
                 except (OSError, NoteConflictError, ValueError) as error:
                     result["failures"].append({"path": path, "error": str(error)})
                 else:
@@ -485,29 +500,59 @@ class Bridge:
                 os.path.abspath(note_path(root, path))
             )
 
-    def set_open_notes(self, workspace_id: str, paths: list[str]) -> None:
-        """Replace the set of open Markdown tabs watched for external changes."""
+    def set_open_files(self, workspace_id: str, paths: list[str]) -> None:
+        """Replace the set of open workspace tabs watched for external changes."""
         if not isinstance(paths, list) or any(
             not isinstance(path, str) for path in paths
         ):
-            raise ValueError("Expected a list of workspace-relative note paths")
+            raise ValueError("Expected a list of workspace-relative file paths")
         with self._lock:
             root = self._require_tree(workspace_id).root
-            open_notes = {
-                os.path.normcase(os.path.abspath(note_path(root, path)))
+            open_files = {
+                os.path.normcase(os.path.abspath(workspace_file_path(root, path)))
                 for path in paths
             }
-            self._open_notes = open_notes
+            self._open_notes = open_files
             self._open_notes_registered = True
-            if self._active_note not in open_notes:
+            if self._active_note not in open_files:
                 self._active_note = None
 
+    def set_open_notes(self, workspace_id: str, paths: list[str]) -> None:
+        """Compatibility alias for replacing the set of watched open tabs."""
+        self.set_open_files(workspace_id, paths)
+
     def save_note(
-        self, workspace_id: str, path: str, content: str, version: str
+        self,
+        workspace_id: str,
+        path: str,
+        content: str,
+        version: str,
+        has_bom: bool = False,
     ) -> NoteSnapshot:
         with self._lock:
             return save_note(
-                self._require_tree(workspace_id).root, path, content, version
+                self._require_tree(workspace_id).root,
+                path,
+                content,
+                version,
+                has_bom,
+            )
+
+    def save_text_file(
+        self,
+        workspace_id: str,
+        path: str,
+        content: str,
+        version: str,
+        has_bom: bool = False,
+    ) -> TextFileSnapshot:
+        with self._lock:
+            return save_text_file(
+                self._require_tree(workspace_id).root,
+                path,
+                content,
+                version,
+                has_bom,
             )
 
     def set_directory_visible(

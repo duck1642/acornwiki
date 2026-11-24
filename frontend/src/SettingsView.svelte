@@ -704,7 +704,7 @@
               <div class="setting-row-head">
                 <div class="setting-info">
                   <label class="setting-label" for="settings-blocked-extensions">Blocked extensions</label>
-                  <span class="setting-desc">Extensions listed here stay visible in the file tree but cannot be opened directly.</span>
+                  <span class="setting-desc">Extensions listed here cannot be opened with external system apps. Plain UTF-8 text files can still be edited safely inside acornwiki.</span>
                 </div>
                 <form class="setting-control" onsubmit={(event) => { event.preventDefault(); void addBlockedExtension() }}>
                   <input

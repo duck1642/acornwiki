@@ -5,14 +5,41 @@ import os
 import stat
 import tempfile
 from pathlib import Path
-from typing import TypedDict
+from typing import Literal, NotRequired, TypedDict
 from urllib.parse import unquote, urlsplit
+
+UTF8_BOM = b"\xef\xbb\xbf"
+TEXT_FILE_MAX_BYTES = 2 * 1024 * 1024
 
 
 class NoteSnapshot(TypedDict):
     path: str
     content: str
     version: str
+    has_bom: NotRequired[bool]
+
+
+class TextFileSnapshot(TypedDict):
+    path: str
+    content: str
+    version: str
+    has_bom: bool
+
+
+class TextFileReadSuccess(TextFileSnapshot):
+    ok: Literal[True]
+    size_bytes: int
+
+
+class TextFileReadFailure(TypedDict):
+    ok: Literal[False]
+    path: str
+    reason: Literal["too_large", "binary", "unsupported_encoding"]
+    size_bytes: int
+    max_bytes: int
+
+
+type TextFileReadResult = TextFileReadSuccess | TextFileReadFailure
 
 
 class NoteBatch(TypedDict):
@@ -87,6 +114,8 @@ def validate_note_rewrites(
         if not isinstance(rewrite, dict) or not all(
             isinstance(rewrite.get(key), str) for key in ("path", "content", "version")
         ):
+            raise ValueError("Invalid note rewrite")
+        if "has_bom" in rewrite and not isinstance(rewrite["has_bom"], bool):
             raise ValueError("Invalid note rewrite")
         # Reject content that cannot be written before starting the move.
         rewrite["content"].encode("utf-8")
@@ -171,6 +200,21 @@ def resolve_note_link(root: Path, note: str, href: str) -> tuple[str, str]:
     return relative.as_posix(), unquote(parts.fragment)
 
 
+def workspace_file_path(root: Path, relative: str) -> Path:
+    """Resolve a workspace-relative file path inside the active workspace."""
+    if not isinstance(relative, str) or not relative:
+        raise ValueError("File path must be a non-empty string")
+    path = Path(relative)
+    if path.anchor or ".." in path.parts:
+        raise ValueError("File must be a workspace-relative path")
+    resolved = (root / path).resolve()
+    try:
+        resolved.relative_to(root)
+    except ValueError as error:
+        raise ValueError("File must stay inside the workspace") from error
+    return resolved
+
+
 def note_path(root: Path, relative: str) -> Path:
     """Resolve a Markdown file inside the active workspace."""
     if not isinstance(relative, str) or not relative:
@@ -186,27 +230,23 @@ def note_path(root: Path, relative: str) -> Path:
     return resolved
 
 
-def read_note(root: Path, relative: str) -> NoteSnapshot:
-    """Read UTF-8 bytes and identify the exact disk version by its hash."""
-    data = note_path(root, relative).read_bytes()
-    return {
-        "path": relative,
-        "content": data.decode("utf-8"),
-        "version": hashlib.sha256(data).hexdigest(),
-    }
+def _decode_utf8_with_bom(data: bytes) -> tuple[str, bool]:
+    has_bom = data.startswith(UTF8_BOM)
+    body = data[len(UTF8_BOM):] if has_bom else data
+    return body.decode("utf-8"), has_bom
 
 
-def save_note(
-    root: Path, relative: str, content: str, expected_version: str
-) -> NoteSnapshot:
-    """Replace an unchanged note with UTF-8 content using a nearby temporary file."""
-    if not isinstance(content, str) or not isinstance(expected_version, str):
-        raise TypeError("Content and expected version must be strings")
-    path = note_path(root, relative)
-    data = content.encode("utf-8")
+def _encode_utf8_with_bom(content: str, has_bom: bool) -> bytes:
+    return (UTF8_BOM if has_bom else b"") + content.encode("utf-8")
+
+
+def _save_workspace_bytes(
+    path: Path, data: bytes, expected_version: str
+) -> str:
+    """Replace an unchanged workspace file atomically using a nearby temporary file."""
     temporary: str | None = None
     try:
-        # A failed temporary write cannot truncate the existing note.
+        # A failed temporary write cannot truncate the existing file.
         with tempfile.NamedTemporaryFile(
             dir=path.parent, prefix=".acornwiki-", delete=False
         ) as file:
@@ -228,8 +268,126 @@ def save_note(
     finally:
         if temporary is not None:
             os.unlink(temporary)
+    return hashlib.sha256(data).hexdigest()
+
+
+def read_note(root: Path, relative: str) -> NoteSnapshot:
+    """Read UTF-8 bytes and identify the exact disk version by its hash."""
+    data = note_path(root, relative).read_bytes()
+    content, has_bom = _decode_utf8_with_bom(data)
     return {
         "path": relative,
         "content": content,
         "version": hashlib.sha256(data).hexdigest(),
+        "has_bom": has_bom,
+    }
+
+
+def save_note(
+    root: Path,
+    relative: str,
+    content: str,
+    expected_version: str,
+    has_bom: bool = False,
+) -> NoteSnapshot:
+    """Replace an unchanged note with UTF-8 content using a nearby temporary file."""
+    if (
+        not isinstance(content, str)
+        or not isinstance(expected_version, str)
+        or not isinstance(has_bom, bool)
+    ):
+        raise TypeError("Content, expected version, and BOM flag must have valid types")
+    path = note_path(root, relative)
+    data = _encode_utf8_with_bom(content, has_bom)
+    version = _save_workspace_bytes(path, data, expected_version)
+    return {
+        "path": relative,
+        "content": content,
+        "version": version,
+        "has_bom": has_bom,
+    }
+
+
+def read_text_file(
+    root: Path, relative: str, max_bytes: int = TEXT_FILE_MAX_BYTES
+) -> TextFileReadResult:
+    """Read a bounded UTF-8 text file or report why it cannot be edited."""
+    if type(max_bytes) is not int or max_bytes <= 0:
+        raise ValueError("max_bytes must be a positive integer")
+    path = workspace_file_path(root, relative)
+    with path.open("rb") as file:
+        info = os.fstat(file.fileno())
+        if stat.S_ISDIR(info.st_mode):
+            raise IsADirectoryError(f"Expected a file, got a directory: {relative}")
+        if info.st_size > max_bytes:
+            return {
+                "ok": False,
+                "path": relative,
+                "reason": "too_large",
+                "size_bytes": info.st_size,
+                "max_bytes": max_bytes,
+            }
+        data = file.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        return {
+            "ok": False,
+            "path": relative,
+            "reason": "too_large",
+            "size_bytes": len(data),
+            "max_bytes": max_bytes,
+        }
+    if b"\x00" in data:
+        return {
+            "ok": False,
+            "path": relative,
+            "reason": "binary",
+            "size_bytes": len(data),
+            "max_bytes": max_bytes,
+        }
+    try:
+        content, has_bom = _decode_utf8_with_bom(data)
+    except UnicodeDecodeError:
+        return {
+            "ok": False,
+            "path": relative,
+            "reason": "unsupported_encoding",
+            "size_bytes": len(data),
+            "max_bytes": max_bytes,
+        }
+    return {
+        "ok": True,
+        "path": relative,
+        "content": content,
+        "version": hashlib.sha256(data).hexdigest(),
+        "has_bom": has_bom,
+        "size_bytes": len(data),
+    }
+
+
+def save_text_file(
+    root: Path,
+    relative: str,
+    content: str,
+    expected_version: str,
+    has_bom: bool = False,
+) -> TextFileSnapshot:
+    """Replace an unchanged workspace text file atomically while preserving BOM."""
+    if (
+        not isinstance(content, str)
+        or not isinstance(expected_version, str)
+        or not isinstance(has_bom, bool)
+    ):
+        raise TypeError("Content, expected version, and BOM flag must have valid types")
+    path = workspace_file_path(root, relative)
+    data = _encode_utf8_with_bom(content, has_bom)
+    if len(data) > TEXT_FILE_MAX_BYTES:
+        raise ValueError(f"Text file exceeds the {TEXT_FILE_MAX_BYTES}-byte limit")
+    if b"\x00" in data:
+        raise ValueError("Text files cannot contain NUL bytes")
+    version = _save_workspace_bytes(path, data, expected_version)
+    return {
+        "path": relative,
+        "content": content,
+        "version": version,
+        "has_bom": has_bom,
     }

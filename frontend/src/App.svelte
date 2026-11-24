@@ -5,11 +5,15 @@
     AppearanceFontWeights,
     AppearancePatch,
     AppearanceView,
+    DocumentKind,
     EditorPreferences,
     EditorStatus,
+    EditorViewSettings,
     FlatOutlineHeading,
+    LoadedFileSnapshot,
     PageWidthPreset,
     SurfaceMode,
+    TextFileReadResult,
   } from './sharedTypes'
 
   type SortMode = 'alphabetic' | 'alphabetic_desc' | 'modified' | 'modified_asc' | 'created' | 'created_asc'
@@ -25,8 +29,22 @@
   type TreeRow =
     | { kind: 'item'; path: string; item: FileTreeItem; depth: number }
     | { kind: 'status'; path: string; message: string; depth: number; error: boolean }
-  type NoteSnapshot = { path: string; content: string; version: string }
-  type NoteTab = { key: string; path: string }
+  type NoteSnapshot = LoadedFileSnapshot
+  type DocumentTab = { key: string; path: string; kind: DocumentKind; initialSnapshot?: LoadedFileSnapshot }
+  type DocumentEditorHandle = {
+    save: (expected?: string) => Promise<boolean>
+    prepareClose: () => Promise<boolean>
+    waitForLoad: () => Promise<void>
+    waitForSave: () => Promise<boolean>
+    resumeAfterFailedClose: () => void
+    scheduleExternalCheck: () => void
+    checkExternalNow: () => Promise<void>
+    hasUnsavedWork: () => boolean
+    closeStatus: () => EditorStatus
+    discardForClose: () => Promise<void>
+    jumpToHeading?: (id: string) => void
+    navigateToFragment?: (fragment: string) => Promise<void>
+  }
   type WorkspaceAppearance = {
     theme: string
     surface_mode: string
@@ -53,6 +71,7 @@
     set_tree_sort: (id: string, sort: SortMode) => Promise<TreeSnapshot>
     refresh_tree: (id: string, path: string | null) => Promise<TreeSnapshot>
     read_note: (id: string, path: string) => Promise<NoteSnapshot>
+    read_text_file?: (id: string, path: string) => Promise<TextFileReadResult>
     list_plan_notes: (id: string) => Promise<string[]>
     read_plan_notes: (id: string, paths: string[], start: number, maxBytes: number, maxNotes: number) => Promise<{ notes: NoteSnapshot[]; next_index: number }>
     plan_link_targets_batch: (id: string, source: string, destination: string, notes: { path: string; targets: string[] }[]) => Promise<(string | null)[][]>
@@ -65,7 +84,9 @@
     set_blocked_extensions: (extensions: string[]) => Promise<void>
     media_url: (id: string) => Promise<string>
     open_external_link: (url: string) => Promise<void>
-    save_note: (id: string, path: string, content: string, version: string) => Promise<NoteSnapshot>
+    save_note: (id: string, path: string, content: string, version: string, hasBom?: boolean) => Promise<NoteSnapshot>
+    save_text_file?: (id: string, path: string, content: string, version: string, hasBom?: boolean) => Promise<LoadedFileSnapshot>
+    set_open_files?: (id: string, paths: string[]) => Promise<void>
     set_open_notes?: (id: string, paths: string[]) => Promise<void>
     finish_close: () => Promise<void>
   }
@@ -84,9 +105,10 @@
   import { fileIconFor as classifyFileIcon, isFileIconId } from './fileIcons'
   import { setFileIconColors } from './fileIconColors'
   import NoteEditor from './NoteEditor.svelte'
+  import TextEditor from './TextEditor.svelte'
   import OutlinePanel from './OutlinePanel.svelte'
   import SettingsView from './SettingsView.svelte'
-  import { openWorkspaceFile } from './fileActions'
+  import { formatUnopenableFileMessage, isKnownExternalFile, isMarkdownPath, openWorkspaceFile } from './fileActions'
   import { planMoveLinks } from './markdownLinkPlan'
 
   const defaultAppearance: AppearanceState = {
@@ -145,25 +167,32 @@
   let effectiveSurface = $derived(sessionSurface ?? appearance.surface_mode)
   let effectivePageWidth = $derived(sessionPageWidth ?? appearance.page_width)
   let viewMenuOpen = $state(false)
-  let showLineNumbers = $state(false)
+  let editorViewSettings = $state<Record<DocumentKind, EditorViewSettings>>({
+    markdown: { lineNumbers: false, wordWrap: true },
+    text: { lineNumbers: true, wordWrap: false },
+  })
+  let unopenableFile = $state<{ path: string; message: string } | null>(null)
   let appearanceSaving = $state(false)
   let settingsOpen = $state(false)
   let filePanelOpen = $state(true)
   let outlineOpen = $state(true)
   let tabOutlines = $state<Record<string, FlatOutlineHeading[]>>({})
   let workspacePicker: HTMLDetailsElement | undefined = $state()
-  let noteTabs = $state<NoteTab[]>([])
+  let noteTabs = $state<DocumentTab[]>([])
   let activeTabKey = $state<string | null>(null)
   let settingsTabOpen = $state(false)
   let tabStatuses = $state<Record<string, EditorStatus>>({})
-  let editors: Record<string, NoteEditor | undefined> = {}
+  let editors: Record<string, DocumentEditorHandle | undefined> = {}
   let bulkClose = $state<{ paths: string[]; error: string; busy: boolean; cancelable: boolean } | null>(null)
   let bulkCloseChoice: ((choice: 'save' | 'discard' | 'cancel') => void) | undefined
   let bulkCancelRequested = false
   let tabMutationQueue: Promise<void> = Promise.resolve()
   let tabsLocked = $state(false)
   let closeRequestActive = false
-  let selectedNote = $derived(noteTabs.find((tab) => tab.key === activeTabKey)?.path ?? null)
+  let activeTab = $derived(noteTabs.find((tab) => tab.key === activeTabKey) ?? null)
+  let selectedNote = $derived(activeTab?.path ?? null)
+  let activeDocumentKind = $derived<DocumentKind | null>(activeTab?.kind ?? null)
+  let activeViewSettings = $derived(activeDocumentKind ? editorViewSettings[activeDocumentKind] : null)
   function workspaceLabel(path: string): string { return path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || path }
   let workspaceName = $derived(selectedWorkspace ? workspaceLabel(selectedWorkspace) : '')
   let navHistory = $state<string[]>([])
@@ -172,9 +201,9 @@
   let canGoForward = $derived(navIndex >= 0 && navIndex < navHistory.length - 1)
   let settingsTabActive = $derived(activeTabKey === settingsTabKey)
   let openTabs = $derived(noteTabs.length > 0 || settingsTabOpen)
-  let activeNoteKey = $derived(activeTabKey && activeTabKey !== settingsTabKey && selectedNote ? activeTabKey : null)
-  let activeOutline = $derived(activeNoteKey ? tabOutlines[activeNoteKey] : undefined)
-  let showRightPanel = $derived(Boolean(selectedNote) && outlineOpen)
+  let activeMarkdownKey = $derived(activeTab?.kind === 'markdown' ? activeTab.key : null)
+  let activeOutline = $derived(activeMarkdownKey ? tabOutlines[activeMarkdownKey] : undefined)
+  let showRightPanel = $derived(activeTab?.kind === 'markdown' && outlineOpen)
   let filesWidth = $state(264)
   let contentsWidth = $state(224)
   let layoutWidth = $state(0)
@@ -385,17 +414,30 @@
     return windows ? normalized.toLowerCase() : normalized
   }
 
-  async function updateOpenNotes(tabs: NoteTab[], id = workspaceId): Promise<boolean> {
+  async function updateOpenNotes(tabs: DocumentTab[], id = workspaceId): Promise<boolean> {
     const api = window.pywebview?.api
-    if (!api || !id || !api.set_open_notes) return true
+    const register = api?.set_open_files ?? api?.set_open_notes
+    if (!api || !id || !register) return true
     try {
-      await api.set_open_notes(id, tabs.map((tab) => tab.path))
+      await register.call(api, id, tabs.map((tab) => tab.path))
       return true
     } catch (error) {
-      workspaceMessage = 'Could not update the open note list.'
+      workspaceMessage = 'Could not update the open file list.'
       console.error(error)
       return false
     }
+  }
+
+  function toggleEditorViewSetting(setting: keyof EditorViewSettings) {
+    if (!activeDocumentKind) return
+    editorViewSettings = {
+      ...editorViewSettings,
+      [activeDocumentKind]: {
+        ...editorViewSettings[activeDocumentKind],
+        [setting]: !editorViewSettings[activeDocumentKind][setting],
+      },
+    }
+    viewMenuOpen = false
   }
 
   function updateTabOutline(key: string, headings: FlatOutlineHeading[]) {
@@ -407,8 +449,8 @@
   }
 
   function jumpToHeading(id: string) {
-    if (!activeTabKey || activeTabKey === settingsTabKey) return
-    editors[activeTabKey]?.jumpToHeading(id)
+    if (!activeMarkdownKey) return
+    editors[activeMarkdownKey]?.jumpToHeading?.(id)
   }
 
   function updateTabStatus(key: string, status: EditorStatus) {
@@ -435,7 +477,12 @@
     navIndex = navHistory.length - 1
   }
 
-  async function openNote(path: string, fragment?: string, options?: { newTab?: boolean; historyDelta?: number }) {
+  function removeUnavailableHistoryItem(index: number) {
+    navHistory = navHistory.filter((_, itemIndex) => itemIndex !== index)
+    if (index < navIndex) navIndex -= 1
+  }
+
+  async function openFile(path: string, fragment?: string, options?: { newTab?: boolean; historyDelta?: number }) {
     const requestedWorkspaceId = workspaceId
     const newTab = Boolean(options?.newTab)
     return serializeTabAction(async () => {
@@ -446,17 +493,54 @@
         if (!target) return
         path = target
       }
+      unopenableFile = null
+      workspaceMessage = ''
+      const markdown = isMarkdownPath(path)
+      if (!markdown && isKnownExternalFile(path)) {
+        if (historyIndex === undefined) await openTreeFile(path)
+        else removeUnavailableHistoryItem(historyIndex)
+        return
+      }
       const key = notePathKey(path)
       const existing = noteTabs.find((tab) => tab.key === key)
       if (existing) {
         activeTabKey = existing.key
         if (historyIndex === undefined) recordNavigation(existing.path)
         else navIndex = historyIndex
-        if (fragment) {
+        if (fragment && existing.kind === 'markdown') {
           await tick()
-          await editors[existing.key]?.navigateToFragment(fragment)
+          await editors[existing.key]?.navigateToFragment?.(fragment)
         }
         return
+      }
+      const kind: DocumentKind = markdown ? 'markdown' : 'text'
+      let initialSnapshot: LoadedFileSnapshot | undefined
+      if (kind === 'text') {
+        const api = window.pywebview?.api
+        if (!api?.read_text_file) {
+          if (historyIndex === undefined) await openTreeFile(path)
+          return
+        }
+        try {
+          const result = await api.read_text_file(requestedWorkspaceId, path)
+          if (requestedWorkspaceId !== workspaceId) return
+          if (!result.ok) {
+            unopenableFile = { path, message: formatUnopenableFileMessage(path, result) }
+            if (historyIndex !== undefined) removeUnavailableHistoryItem(historyIndex)
+            return
+          }
+          initialSnapshot = {
+            path: result.path,
+            content: result.content,
+            version: result.version,
+            has_bom: result.has_bom,
+          }
+        } catch (error) {
+          if (requestedWorkspaceId === workspaceId) workspaceMessage = 'Could not open the file.'
+          if (requestedWorkspaceId === workspaceId && historyIndex !== undefined) removeUnavailableHistoryItem(historyIndex)
+          console.error(error)
+          return
+        }
       }
       tabsLocked = true
       try {
@@ -475,9 +559,10 @@
           !currentStatus?.saving &&
           !currentStatus?.conflict,
         )
+        const newEntry: DocumentTab = { key, path, kind, initialSnapshot }
         const next = canReplace && currentTab
-          ? noteTabs.map((tab, index) => (index === currentIndex ? { key, path } : tab))
-          : [...noteTabs, { key, path }]
+          ? noteTabs.map((tab, index) => (index === currentIndex ? newEntry : tab))
+          : [...noteTabs, newEntry]
         if (!(await updateOpenNotes(next))) return
         if (canReplace && currentTab) {
           const nextStatuses = { ...tabStatuses }
@@ -493,7 +578,7 @@
         else navIndex = historyIndex
       } finally { tabsLocked = false }
       await checkRegisteredNotes()
-      if (fragment) await editors[key]?.navigateToFragment(fragment)
+      if (fragment && kind === 'markdown') await editors[key]?.navigateToFragment?.(fragment)
     })
   }
 
@@ -509,12 +594,12 @@
 
   function navigateBack() {
     if (!canGoBack || tabsLocked) return
-    void openNote('', undefined, { historyDelta: -1 })
+    void openFile('', undefined, { historyDelta: -1 })
   }
 
   function navigateForward() {
     if (!canGoForward || tabsLocked) return
-    void openNote('', undefined, { historyDelta: 1 })
+    void openFile('', undefined, { historyDelta: 1 })
   }
 
   function chooseBulkClose(choice: 'save' | 'discard' | 'cancel') {
@@ -701,6 +786,7 @@
       if (workspacePicker) workspacePicker.open = false
       loadingWorkspace = true
       workspaceMessage = ''
+      unopenableFile = null
       settingsMessage = ''
       folderSettingsMessage = ''
       selectedWorkspace = null
@@ -915,8 +1001,7 @@
   }
   async function openSearchResult(path: string, isDirectory: boolean, newTab = false) {
     if (!isDirectory) {
-      if (path.toLowerCase().endsWith('.md')) await openNote(path, undefined, { newTab })
-      else await openTreeFile(path)
+      await openFile(path, undefined, { newTab })
       return
     }
     const id = workspaceId
@@ -1016,7 +1101,8 @@
             <button class="popup-menu-item" aria-pressed={effectivePageWidth === preset.value} title={preset.title} onclick={() => { sessionPageWidth = preset.value; viewMenuOpen = false }}>{preset.label}{#if effectivePageWidth === preset.value}<span class="popup-menu-mark"><Icon name="check" size={14} /></span>{/if}</button>
           {/each}
           <div class="popup-menu-divider"></div>
-          <button class="popup-menu-item" aria-pressed={showLineNumbers} onclick={() => { showLineNumbers = !showLineNumbers; viewMenuOpen = false }}>Line numbers{#if showLineNumbers}<span class="popup-menu-mark"><Icon name="check" size={14} /></span>{/if}</button>
+          <button class="popup-menu-item" disabled={!activeViewSettings} aria-pressed={activeViewSettings?.lineNumbers ?? false} onclick={() => toggleEditorViewSetting('lineNumbers')}>Line numbers{#if activeViewSettings?.lineNumbers}<span class="popup-menu-mark"><Icon name="check" size={14} /></span>{/if}</button>
+          <button class="popup-menu-item" disabled={!activeViewSettings} aria-pressed={activeViewSettings?.wordWrap ?? false} onclick={() => toggleEditorViewSetting('wordWrap')}>Word wrap{#if activeViewSettings?.wordWrap}<span class="popup-menu-mark"><Icon name="check" size={14} /></span>{/if}</button>
           <div class="popup-menu-divider"></div>
           <button class="popup-menu-item" onclick={() => { sessionSurface = null; sessionPageWidth = null; viewMenuOpen = false }}>Use workspace default</button>
         </PopupMenu>
@@ -1024,7 +1110,7 @@
       <button class="menu-item" disabled title="This menu is not available yet">Navigate</button>
       <button class="menu-item" disabled title="This menu is not available yet">Help</button>
     </div>
-    <button class="menu-sidebar-toggle menu-sidebar-toggle-right" onclick={toggleOutlinePanel} disabled={!selectedNote} aria-label="Toggle contents panel" aria-pressed={outlineOpen} title="Toggle contents panel"><Icon name={outlineOpen ? 'panel-right' : 'panel-right-closed'} /></button>
+    <button class="menu-sidebar-toggle menu-sidebar-toggle-right" onclick={toggleOutlinePanel} disabled={activeDocumentKind !== 'markdown'} aria-label="Toggle contents panel" aria-pressed={outlineOpen} title="Toggle contents panel"><Icon name={outlineOpen ? 'panel-right' : 'panel-right-closed'} /></button>
   </header>
 
   <div class="workspace-layout" class:files-hidden={!filePanelOpen} class:outline-open={showRightPanel} bind:clientWidth={layoutWidth} style:--files-width={`${panelWidths.files}px`} style:--contents-width={`${panelWidths.contents}px`}>
@@ -1077,8 +1163,8 @@
                   class="search-result"
                   title={result.path}
                   onclick={(event) => openSearchResult(result.path, result.is_directory, event.ctrlKey || event.metaKey)}
-                  onmousedown={(event) => { if (event.button === 1 && !result.is_directory && result.path.toLowerCase().endsWith('.md')) event.preventDefault() }}
-                  onauxclick={(event) => { if (event.button === 1 && !result.is_directory && result.path.toLowerCase().endsWith('.md')) { event.preventDefault(); void openNote(result.path, undefined, { newTab: true }) } }}
+                  onmousedown={(event) => { if (event.button === 1 && !result.is_directory && !isKnownExternalFile(result.path)) event.preventDefault() }}
+                  onauxclick={(event) => { if (event.button === 1 && !result.is_directory && !isKnownExternalFile(result.path)) { event.preventDefault(); void openFile(result.path, undefined, { newTab: true }) } }}
                 ><Icon name={result.is_directory ? 'chevron-right' : fileIconFor(result.path)} class={result.is_directory ? '' : `file-icon-${fileIconFor(result.path)}`} /><span>{result.path}</span></button>
               {/each}
             </div>
@@ -1102,22 +1188,18 @@
                           <span class="tree-disclosure" class:collapsed={!expandedFolders.includes(row.path)}><Icon name={expandedFolders.includes(row.path) ? 'chevron-down' : 'chevron-right'} /></span>
                           <span class="tree-label" title={row.item.name}>{row.item.name}</span>
                         </button>
-                      {:else if row.path.toLowerCase().endsWith('.md')}
+                      {:else}
                         <button
-                          class="tree-file tree-note"
+                          class="tree-file"
+                          class:tree-note={isMarkdownPath(row.path)}
                           class:selected={notePathKey(row.path) === activeTabKey}
                           aria-current={notePathKey(row.path) === activeTabKey ? 'true' : undefined}
                           title={row.item.name}
-                          onclick={(event) => openNote(row.path, undefined, { newTab: event.ctrlKey || event.metaKey })}
-                          onmousedown={(event) => { if (event.button === 1) event.preventDefault() }}
-                          onauxclick={(event) => { if (event.button === 1) { event.preventDefault(); void openNote(row.path, undefined, { newTab: true }) } }}
+                          onclick={(event) => openFile(row.path, undefined, { newTab: event.ctrlKey || event.metaKey })}
+                          onmousedown={(event) => { if (event.button === 1 && !isKnownExternalFile(row.path)) event.preventDefault() }}
+                          onauxclick={(event) => { if (event.button === 1 && !isKnownExternalFile(row.path)) { event.preventDefault(); void openFile(row.path, undefined, { newTab: true }) } }}
                           onkeydown={handleTreeKeydown}
                         >
-                          <Icon name={fileIconFor(row.item.name)} class={`tree-icon file-icon-${fileIconFor(row.item.name)}`} />
-                          <span class="tree-label">{row.item.name}</span>
-                        </button>
-                      {:else}
-                        <button class="tree-file" title={row.item.name} onclick={() => openTreeFile(row.path)} onkeydown={handleTreeKeydown}>
                           <Icon name={fileIconFor(row.item.name)} class={`tree-icon file-icon-${fileIconFor(row.item.name)}`} />
                           <span class="tree-label">{row.item.name}</span>
                         </button>
@@ -1201,24 +1283,46 @@
         </div>
         <div class="document-host-body" inert={Boolean(bulkClose)}>
           {#each noteTabs as tab (tab.key)}
-            <NoteEditor
-              bind:this={editors[tab.key]}
-              tabKey={tab.key}
-              notePath={tab.path}
-              active={activeTabKey === tab.key}
-              freezeEditors={tabsLocked}
-              workspaceId={workspaceId ?? ''}
-              {workspaceName}
-              {editorPreferences}
-              {showLineNumbers}
-              {canGoBack}
-              {canGoForward}
-              onNavigateBack={navigateBack}
-              onNavigateForward={navigateForward}
-              onOpenNote={openNote}
-              onStatusChange={updateTabStatus}
-              onOutlineChange={updateTabOutline}
-            />
+            {#if tab.kind === 'markdown'}
+              <NoteEditor
+                bind:this={editors[tab.key]}
+                tabKey={tab.key}
+                notePath={tab.path}
+                active={activeTabKey === tab.key}
+                freezeEditors={tabsLocked}
+                workspaceId={workspaceId ?? ''}
+                {workspaceName}
+                {editorPreferences}
+                showLineNumbers={editorViewSettings.markdown.lineNumbers}
+                wordWrap={editorViewSettings.markdown.wordWrap}
+                {canGoBack}
+                {canGoForward}
+                onNavigateBack={navigateBack}
+                onNavigateForward={navigateForward}
+                onOpenFile={openFile}
+                onStatusChange={updateTabStatus}
+                onOutlineChange={updateTabOutline}
+              />
+            {:else}
+              <TextEditor
+                bind:this={editors[tab.key]}
+                tabKey={tab.key}
+                filePath={tab.path}
+                initialSnapshot={tab.initialSnapshot}
+                active={activeTabKey === tab.key}
+                freezeEditors={tabsLocked}
+                workspaceId={workspaceId ?? ''}
+                {workspaceName}
+                {editorPreferences}
+                showLineNumbers={editorViewSettings.text.lineNumbers}
+                wordWrap={editorViewSettings.text.wordWrap}
+                {canGoBack}
+                {canGoForward}
+                onNavigateBack={navigateBack}
+                onNavigateForward={navigateForward}
+                onStatusChange={updateTabStatus}
+              />
+            {/if}
           {/each}
           {#if settingsTabOpen}
             <SettingsView
@@ -1255,12 +1359,22 @@
           <h2>Select a workspace</h2><p>Choose a workspace from the file panel.</p>
         </section>
       {/if}
+      {#if unopenableFile}
+        {@const blocked = unopenableFile}
+        <div role="alert" class="workspace-notice-banner">
+          <span>{blocked.message}</span>
+          <span class="workspace-notice-actions">
+            <button onclick={() => { void openTreeFile(blocked.path); unopenableFile = null }}>Open with default app</button>
+            <button onclick={() => { unopenableFile = null }}>Dismiss</button>
+          </span>
+        </div>
+      {/if}
       {#if workspaceMessage}<p role={workspaceMessage.startsWith('Could not') ? 'alert' : 'status'} class="workspace-message">{workspaceMessage}</p>{/if}
     </section>
 
     <OutlinePanel
       open={showRightPanel}
-      noteKey={activeNoteKey}
+      noteKey={activeMarkdownKey}
       headings={activeOutline}
       width={panelWidths.contents}
       onResize={(width) => resizePanel('right', width)}

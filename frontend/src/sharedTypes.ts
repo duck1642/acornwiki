@@ -38,6 +38,37 @@ export type EditorStatus = {
   conflict: boolean
 }
 
+export type DocumentKind = 'markdown' | 'text'
+
+export type EditorViewSettings = {
+  lineNumbers: boolean
+  wordWrap: boolean
+}
+
+export type LoadedFileSnapshot = {
+  path: string
+  content: string
+  version: string
+  has_bom?: boolean
+}
+
+export type TextFileReadResult =
+  | {
+    ok: true
+    path: string
+    content: string
+    version: string
+    has_bom: boolean
+    size_bytes: number
+  }
+  | {
+    ok: false
+    path: string
+    reason: 'too_large' | 'binary' | 'unsupported_encoding'
+    size_bytes: number
+    max_bytes: number
+  }
+
 export type FlatOutlineHeading = {
   id: string
   label: string

@@ -6,8 +6,14 @@
   import DOMPurify from 'dompurify'
   import Icon from './Icon.svelte'
   import PopupMenu from './PopupMenu.svelte'
-  import { openWorkspaceFile } from './fileActions'
-  import { createMarkdownEditorExtensions, highlightCodeElement, lineNumbersExtension } from './markdownEditor'
+  import { buildBreadcrumb } from './editorCore'
+  import { FileSession } from './fileSession.svelte'
+  import {
+    createMarkdownEditorExtensions,
+    highlightCodeElement,
+    lineNumbersExtension,
+    wordWrapExtension,
+  } from './markdownEditor'
   import { noteLineEndings, noteText } from './noteLineEndings'
   import type { EditorPreferences, EditorStatus, FlatOutlineHeading } from './sharedTypes'
 
@@ -27,11 +33,12 @@
     freezeEditors = false,
     editorPreferences,
     showLineNumbers = false,
+    wordWrap = true,
     canGoBack = false,
     canGoForward = false,
     onNavigateBack,
     onNavigateForward,
-    onOpenNote,
+    onOpenFile,
     onStatusChange,
     onOutlineChange,
   }: {
@@ -43,64 +50,59 @@
     freezeEditors?: boolean
     editorPreferences: EditorPreferences
     showLineNumbers?: boolean
+    wordWrap?: boolean
     canGoBack?: boolean
     canGoForward?: boolean
     onNavigateBack?: () => void
     onNavigateForward?: () => void
-    onOpenNote: (path: string, fragment?: string, options?: { newTab?: boolean }) => void | Promise<void>
+    onOpenFile: (path: string, fragment?: string, options?: { newTab?: boolean }) => void | Promise<void>
     onStatusChange: (key: string, status: EditorStatus) => void
     onOutlineChange?: (key: string, headings: FlatOutlineHeading[]) => void
   } = $props()
+
   let host: HTMLDivElement
   let panel: HTMLElement
   let view: EditorView
   const editableCompartment = new Compartment()
   const readOnlyCompartment = new Compartment()
   const lineNumbersCompartment = new Compartment()
-  let path = $state<string | null>(null)
-  let text = $state('')
-  let savedText = $state('')
-  let version = $state('')
-  let mode = $state<'source' | 'read'>('source')
-  let message = $state('')
-  let error = $state('')
-  let conflict = $state(false)
-  let missing = $state(false)
-  let diskVersion = $state('')
-  let diskText = $state('')
-  let saving = $state(false)
-  let opening = false
-  let outlineReady = $state(false)
-  let disposed = false
-  let loadingPromise: Promise<void> = Promise.resolve()
-  let prompt = $state(false)
-  let chooseClose: ((choice: 'save' | 'discard' | 'cancel') => void) | undefined
-  let operation = 0
-  let externalTimer: ReturnType<typeof setTimeout> | undefined
-  let saveTimer: ReturnType<typeof setTimeout> | undefined
-  let savePromise: Promise<boolean> | undefined
-  let externalCheckPromise: Promise<void> | undefined
-  let externalCheckPending = false
-  let mediaUrl = $state('')
-  let dirty = $derived(text !== savedText)
-  let rendered = $derived(renderMarkdown(text, path, mediaUrl))
-  let outline = $derived(extractOutline(rendered))
-  let breadcrumb = $derived(buildBreadcrumb(path, workspaceName))
+  const wordWrapCompartment = new Compartment()
 
-  function buildBreadcrumb(note: string | null, rootName: string): { prefix: string; file: string } {
-    if (!note) return { prefix: '', file: '' }
-    const parts = note.replace(/\\/g, '/').split('/').filter(Boolean)
-    const file = parts.pop() ?? note
-    const dirs = rootName ? [rootName, ...parts] : parts
-    return {
-      prefix: dirs.length ? `${dirs.join(' / ')} / ` : '',
-      file,
-    }
-  }
+  let mode = $state<'source' | 'read'>('source')
+  let outlineReady = $state(false)
+  let mediaUrl = $state('')
+
+  const session = new FileSession({
+    entityLabel: 'note',
+    initialPath: untrack(() => notePath),
+    read: async (targetPath) => {
+      const api = window.pywebview?.api
+      if (!api) throw new Error('Backend unavailable')
+      const note = await api.read_note(workspaceId, targetPath)
+      return { ok: true, file: note }
+    },
+    save: async (targetPath, content, expectedVersion, hasBom) => {
+      const api = window.pywebview?.api
+      if (!api) throw new Error('Backend unavailable')
+      return await api.save_note(workspaceId, targetPath, content, expectedVersion, hasBom)
+    },
+    getPreferences: () => editorPreferences,
+    getFreezeEditors: () => freezeEditors,
+    onDocumentLoaded: (content) => {
+      setDocument(content)
+    },
+    onInitialLoadFinished: () => {
+      outlineReady = true
+    },
+  })
+
+  let rendered = $derived(renderMarkdown(session.text, session.path, mediaUrl))
+  let outline = $derived(extractOutline(rendered))
+  let breadcrumb = $derived(buildBreadcrumb(session.path, workspaceName))
 
   $effect(() => {
     const key = tabKey
-    const status = { dirty, saving, conflict }
+    const status = { dirty: session.dirty, saving: session.saving, conflict: session.conflict }
     untrack(() => onStatusChange(key, status))
   })
 
@@ -111,13 +113,11 @@
   })
 
   $effect(() => {
-    const canAutoSave = editorPreferences.autosave && !prompt && !freezeEditors && !conflict && Boolean(path) && dirty
-    if (!canAutoSave) clearTimeout(saveTimer)
-    else scheduleSave()
+    session.syncAutosave()
   })
 
   $effect(() => {
-    const readOnly = prompt || freezeEditors
+    const readOnly = session.prompt || freezeEditors
     const currentView = view
     if (!currentView) return
     currentView.dispatch({ effects: [
@@ -131,6 +131,13 @@
     const currentView = view
     if (!currentView) return
     currentView.dispatch({ effects: lineNumbersCompartment.reconfigure(lineNumbersExtension(enabled)) })
+  })
+
+  $effect(() => {
+    const enabled = wordWrap
+    const currentView = view
+    if (!currentView) return
+    currentView.dispatch({ effects: wordWrapCompartment.reconfigure(wordWrapExtension(enabled)) })
   })
 
   function extractOutline(html: string): FlatOutlineHeading[] {
@@ -245,30 +252,26 @@
     }
     if (event.type === 'auxclick' && event.button !== 1) return
     const link = element.closest('a')
-    if (!link || !path) return
+    if (!link || !session.path) return
     event.preventDefault()
     const newTab = event.button === 1 || event.ctrlKey || event.metaKey
     const href = link.getAttribute('href') ?? ''
     const api = window.pywebview?.api
     if (!api) return
-    error = ''
+    session.error = ''
     try {
       if (/^https?:\/\//i.test(href)) await api.open_external_link(href)
       else {
-        const target = await api.resolve_note_link(workspaceId, path, href)
-        if (disposed) return
-        if (!target.path.toLowerCase().endsWith('.md')) {
-          if (target.fragment) {
-            error = 'Opening a specific section of this file is not supported.'
-            return
-          }
-          await openWorkspaceFile(workspaceId, target.path)
+        const target = await api.resolve_note_link(workspaceId, session.path, href)
+        if (session.isDisposed) return
+        if (!target.path.toLowerCase().endsWith('.md') && target.fragment) {
+          session.error = 'Opening a specific section of this file is not supported.'
           return
         }
-        if (target.path !== path) await onOpenNote(target.path, target.fragment, { newTab })
+        if (target.path !== session.path) await onOpenFile(target.path, target.fragment, { newTab })
         else if (target.fragment) await navigateToFragment(target.fragment)
       }
-    } catch (reason) { error = 'Could not open the link.'; console.error(reason) }
+    } catch (reason) { session.error = 'Could not open the link.'; console.error(reason) }
   }
 
   function linkMousedown(event: MouseEvent) {
@@ -300,7 +303,7 @@
   }
 
   function handleSheetMousedown(event: MouseEvent) {
-    if (event.button !== 0 || mode !== 'source' || !path || !view) return
+    if (event.button !== 0 || mode !== 'source' || !session.path || !view) return
     const target = event.target as HTMLElement | null
     if (!target) return
     if (target.closest('.cm-editor') || target.closest('button, a, input, summary')) return
@@ -312,20 +315,18 @@
 
   function setDocument(content: string) {
     view.setState(EditorState.create({ doc: content, extensions: extensions(content) }))
-    text = content
   }
 
   function extensions(content = '') {
     return createMarkdownEditorExtensions([
       noteLineEndings(content),
       lineNumbersCompartment.of(lineNumbersExtension(showLineNumbers)),
-      editableCompartment.of(EditorView.editable.of(!prompt && !freezeEditors)),
-      readOnlyCompartment.of(EditorState.readOnly.of(prompt || freezeEditors)),
+      wordWrapCompartment.of(wordWrapExtension(wordWrap)),
+      editableCompartment.of(EditorView.editable.of(!session.prompt && !freezeEditors)),
+      readOnlyCompartment.of(EditorState.readOnly.of(session.prompt || freezeEditors)),
       EditorView.updateListener.of((update) => {
         if (update.docChanged) {
-          text = noteText(update.state)
-          message = ''
-          scheduleSave()
+          session.onEditorTextChange(noteText(update.state))
         }
       }),
     ])
@@ -334,197 +335,23 @@
   onMount(() => {
     void window.pywebview?.api?.media_url?.(workspaceId).then((url) => { mediaUrl = url }).catch(console.error)
     view = new EditorView({ state: EditorState.create({ extensions: extensions() }), parent: host })
-    loadingPromise = loadNote()
+    session.start()
     return () => {
-      disposed = true
-      operation += 1
-      clearTimeout(saveTimer)
-      clearTimeout(externalTimer)
+      session.dispose()
       view.destroy()
     }
   })
 
-  function scheduleSave() {
-    clearTimeout(saveTimer)
-    if (editorPreferences.autosave && !prompt && !freezeEditors && dirty && path && !conflict) {
-      saveTimer = setTimeout(() => {
-        if (!prompt && !freezeEditors) void save()
-      }, 1000)
-    }
-  }
-
-  export async function prepareClose(): Promise<boolean> {
-    if (prompt) return false
-    if (opening) {
-      await loadingPromise
-      if (disposed) return false
-    }
-    if (savePromise && !(await savePromise)) return false
-    if (!dirty) return true
-    prompt = true
-    const choice = await new Promise<'save' | 'discard' | 'cancel'>((resolve) => { chooseClose = resolve })
-    prompt = false
-    chooseClose = undefined
-    if (choice === 'cancel') return false
-    if (choice === 'discard') { clearTimeout(saveTimer); return true }
-    return await save() && text === savedText
-  }
-
-  export async function waitForLoad(): Promise<void> {
-    await loadingPromise
-  }
-
-  export async function waitForSave(): Promise<boolean> {
-    return savePromise ? await savePromise : true
-  }
-
-  export function resumeAfterFailedClose() {
-    scheduleSave()
-  }
-
-  async function loadNote() {
-    if (opening || disposed) return
-    const api = window.pywebview?.api
-    if (!api) return
-    const token = ++operation
-    opening = true
-    error = ''
-    try {
-      const note = await api.read_note(workspaceId, notePath)
-      if (token !== operation) return
-      clearTimeout(saveTimer)
-      path = note.path
-      version = note.version
-      savedText = note.content
-      setDocument(note.content)
-      conflict = false
-      missing = false
-      message = ''
-      scheduleExternalCheck()
-    } catch (reason) { if (token === operation) { error = 'Could not open or watch the note.'; console.error(reason); scheduleSave() } }
-    finally { opening = false; if (!disposed && token === operation) outlineReady = true }
-  }
-
-  export async function save(expected = version): Promise<boolean> {
-    if (savePromise) return savePromise
-    if (!path || !window.pywebview?.api || (conflict && expected === version)) return false
-    const api = window.pywebview.api
-    const currentPath = path
-    const content = text
-    const token = operation
-    clearTimeout(saveTimer)
-    saving = true
-    error = ''
-    savePromise = (async () => {
-      try {
-        const result = await api.save_note(workspaceId, currentPath, content, expected)
-        if (token !== operation) return false
-        version = result.version
-        savedText = content
-        conflict = false
-        missing = false
-        message = ''
-        if (text !== savedText) scheduleSave()
-        return true
-      } catch (reason) {
-        if (disposed || token !== operation) return false
-        console.error(reason)
-        await checkExternal()
-        if (!conflict) error = 'Could not save the note.'
-        return false
-      } finally { saving = false; savePromise = undefined }
-    })()
-    return savePromise
-  }
-
-  export function scheduleExternalCheck() {
-    clearTimeout(externalTimer)
-    externalTimer = setTimeout(() => void checkExternal(), 250)
-  }
-
-  export async function checkExternalNow() {
-    clearTimeout(externalTimer)
-    await checkExternal()
-  }
-
-  export function hasUnsavedWork(): boolean {
-    return dirty || saving
-  }
-
-  export function closeStatus(): EditorStatus {
-    return { dirty, saving, conflict }
-  }
-
-  export async function discardForClose(): Promise<void> {
-    clearTimeout(saveTimer)
-    if (savePromise) await savePromise
-    clearTimeout(saveTimer)
-  }
-
-  async function checkExternal() {
-    externalCheckPending = true
-    if (externalCheckPromise) return externalCheckPromise
-    externalCheckPromise = (async () => {
-      while (externalCheckPending && !disposed) {
-        externalCheckPending = false
-        await checkExternalOnce()
-      }
-    })()
-    try { await externalCheckPromise }
-    finally { externalCheckPromise = undefined }
-  }
-
-  async function checkExternalOnce() {
-    const api = window.pywebview?.api
-    if (disposed || !api) return
-    if (!path) { await loadNote(); return }
-    const token = operation
-    const checkedVersion = version
-    try {
-      const note = await api.read_note(workspaceId, path)
-      if (token !== operation) return
-      if (checkedVersion !== version) { externalCheckPending = true; return }
-      if (note.version === version) {
-        const resolved = conflict
-        conflict = false
-        missing = false
-        if (resolved) { message = ''; if (dirty) scheduleSave() }
-        return
-      }
-      diskVersion = note.version
-      diskText = note.content
-      missing = false
-      if (!dirty && editorPreferences.auto_reload && !saving) {
-        version = note.version
-        savedText = note.content
-        setDocument(note.content)
-        conflict = false
-        message = editorPreferences.reload_notice ? 'File changed externally and was reloaded.' : ''
-      } else {
-        clearTimeout(saveTimer)
-        conflict = true
-        message = 'File changed externally. Your editor content was kept.'
-      }
-    } catch (reason) {
-      if (token !== operation) return
-      if (checkedVersion !== version) { externalCheckPending = true; return }
-      clearTimeout(saveTimer)
-      conflict = true
-      missing = true
-      message = 'File cannot be read; it may have been moved or deleted. Your editor content was kept.'
-      console.error(reason)
-    }
-  }
-
-  function loadDisk() {
-    if (dirty && !window.confirm('Discard unsaved changes and load the version on disk?')) return
-    version = diskVersion
-    savedText = diskText
-    setDocument(diskText)
-    conflict = false
-    message = 'Loaded the version on disk.'
-  }
-
+  export function prepareClose(): Promise<boolean> { return session.prepareClose() }
+  export function waitForLoad(): Promise<void> { return session.waitForLoad() }
+  export function waitForSave(): Promise<boolean> { return session.waitForSave() }
+  export function resumeAfterFailedClose() { session.resumeAfterFailedClose() }
+  export function save(expected?: string): Promise<boolean> { return session.save(expected) }
+  export function scheduleExternalCheck() { session.scheduleExternalCheck() }
+  export function checkExternalNow(): Promise<void> { return session.checkExternalNow() }
+  export function hasUnsavedWork(): boolean { return session.hasUnsavedWork() }
+  export function closeStatus(): EditorStatus { return session.closeStatus() }
+  export function discardForClose(): Promise<void> { return session.discardForClose() }
 </script>
 
 <section class="note-panel" class:inactive={!active} aria-label="Markdown editor" aria-hidden={!active} inert={!active} bind:this={panel} data-note-path={notePath}>
@@ -533,13 +360,13 @@
       <button class="icon-button note-nav-btn" onclick={() => onNavigateBack?.()} disabled={!canGoBack || freezeEditors} aria-label="Navigate back" title="Navigate back"><Icon name="arrow-left" size={14} /></button>
       <button class="icon-button note-nav-btn" onclick={() => onNavigateForward?.()} disabled={!canGoForward || freezeEditors} aria-label="Navigate forward" title="Navigate forward"><Icon name="arrow-right" size={14} /></button>
     </div>
-    <div class="note-breadcrumb" title={path ?? ''}>
+    <div class="note-breadcrumb" title={session.path ?? ''}>
       {#if breadcrumb.prefix}<span class="note-breadcrumb-dir">{breadcrumb.prefix}</span>{/if}{#if breadcrumb.file}<span class="note-breadcrumb-file">{breadcrumb.file}</span>{/if}
     </div>
-    {#if path}
+    {#if session.path}
       <button onclick={() => mode = 'source'} aria-pressed={mode === 'source'} aria-label="Source" title="Source"><Icon name="source-code" /></button>
       <button onclick={() => mode = 'read'} aria-pressed={mode === 'read'} aria-label="Read" title="Read"><Icon name="book-open" /></button>
-      <button onclick={() => save()} disabled={!dirty || saving || conflict || freezeEditors || prompt} aria-label="Save" title="Save"><Icon name="save" /></button>
+      <button onclick={() => session.save()} disabled={!session.dirty || session.saving || session.conflict || freezeEditors || session.prompt} aria-label="Save" title="Save"><Icon name="save" /></button>
       <details class="note-more-menu">
         <summary aria-label="More note actions" title="More note actions"><Icon name="ellipsis" /></summary>
         <PopupMenu class="note-more-content">
@@ -552,35 +379,35 @@
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="note-scroll" onmousedown={handleSheetMousedown}>
     <div class="note-sheet">
-      {#if !path}
+      {#if !session.path}
         <div class="note-empty-state">
           <h2>No note selected</h2>
           <p>Choose a Markdown file from the workspace tree.</p>
         </div>
       {/if}
-      <div class="note-content" hidden={!path || mode !== 'source'} bind:this={host}></div>
-      {#if path && mode === 'read'}<article class="note-content note-read" use:linkHandler={rendered}>{@html rendered}</article>{/if}
+      <div class="note-content" hidden={!session.path || mode !== 'source'} bind:this={host}></div>
+      {#if session.path && mode === 'read'}<article class="note-content note-read" use:linkHandler={rendered}>{@html rendered}</article>{/if}
     </div>
   </div>
-  {#if message || error || conflict || prompt}
+  {#if session.message || session.error || session.conflict || session.prompt}
     <div class="note-notices">
-      {#if message && !conflict}<p role="status" class="status-notice">{message}</p>{/if}
-      {#if error}<p role="alert" class="note-error">{error}</p>{/if}
-      {#if conflict}
+      {#if session.message && !session.conflict}<p role="status" class="status-notice">{session.message}</p>{/if}
+      {#if session.error}<p role="alert" class="note-error">{session.error}</p>{/if}
+      {#if session.conflict}
         <div role="alert" class="note-conflict">
-          <span>{message || (missing ? 'The note is missing or cannot be read.' : 'The note changed outside acornwiki.')}</span>
-          {#if !missing}
-            <button onclick={loadDisk}>Load disk version</button>
-            {#if dirty}<button onclick={() => { if (window.confirm('Replace the disk version with the editor content?')) void save(diskVersion) }}>Overwrite with editor version</button>{/if}
+          <span>{session.message || (session.missing ? 'The note is missing or cannot be read.' : 'The note changed outside acornwiki.')}</span>
+          {#if !session.missing}
+            <button onclick={() => session.loadDisk()}>Load disk version</button>
+            {#if session.dirty}<button onclick={() => { if (window.confirm('Replace the disk version with the editor content?')) void session.save(session.diskVersion) }}>Overwrite with editor version</button>{/if}
           {/if}
-          <button onclick={() => void checkExternal()}>Check again</button>
+          <button onclick={() => void session.checkExternal()}>Check again</button>
         </div>
       {/if}
-      {#if prompt}
+      {#if session.prompt}
         <div role="alert" class="note-conflict">You have unsaved changes.
-          <button onclick={() => chooseClose?.('save')}>Save</button>
-          <button onclick={() => chooseClose?.('discard')}>Discard</button>
-          <button onclick={() => chooseClose?.('cancel')}>Cancel</button>
+          <button onclick={() => session.resolveClose('save')}>Save</button>
+          <button onclick={() => session.resolveClose('discard')}>Discard</button>
+          <button onclick={() => session.resolveClose('cancel')}>Cancel</button>
         </div>
       {/if}
     </div>
