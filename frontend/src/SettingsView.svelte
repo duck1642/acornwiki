@@ -4,6 +4,7 @@
   import type {
     AppearanceFonts,
     AppearanceFontSizes,
+    AppearanceFontWeights,
     AppearancePatch,
     AppearanceView,
     EditorPreferences,
@@ -85,6 +86,12 @@
     { id: 'jetbrains', label: 'JetBrains / Fira Mono', stack: ['JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', 'monospace'], matches: ['JetBrains Mono', 'Fira Code'] },
     { id: 'courier', label: 'Courier', stack: ['Courier New', 'Consolas', 'monospace'], matches: ['Courier New'] },
   ]
+  const fontWeightOptions: { value: number; label: string }[] = [
+    { value: 300, label: 'Light' },
+    { value: 400, label: 'Regular' },
+    { value: 500, label: 'Medium' },
+    { value: 600, label: 'Semibold' },
+  ]
   const colorTokens: { id: string; label: string; cssVar: string; role: string }[] = [
     { id: 'bg-app', label: 'Canvas', cssVar: '--bg-app', role: 'Outer backdrop' },
     { id: 'bg-panel', label: 'Panels', cssVar: '--bg-panel', role: 'Sidebars & bars' },
@@ -127,6 +134,15 @@
     void onSetAppearance({ font_sizes: { ...appearance.font_sizes, [kind]: next } })
   }
 
+  function weightLabel(weight: number): string {
+    return fontWeightOptions.find((option) => option.value === weight)?.label ?? String(weight)
+  }
+
+  function updateFontWeight(kind: keyof AppearanceFontWeights, weight: number) {
+    if (weight === appearance.font_weights[kind]) return
+    void onSetAppearance({ font_weights: { ...appearance.font_weights, [kind]: weight } })
+  }
+
   let scope = $state<Scope>('workspace')
   let query = $state('')
   let newExtension = $state('')
@@ -136,6 +152,9 @@
   let uiFontMenuOpen = $state(false)
   let bodyFontMenuOpen = $state(false)
   let monoFontMenuOpen = $state(false)
+  let uiWeightMenuOpen = $state(false)
+  let bodyWeightMenuOpen = $state(false)
+  let monoWeightMenuOpen = $state(false)
   let themeColorsOpen = $state(false)
   let appearanceDisabled = $derived(!workspaceId || appearanceSaving)
   let currentThemeLabel = $derived(themeOptions.find((option) => option.value === appearance.theme)?.label ?? appearance.theme)
@@ -181,9 +200,9 @@
   let showNewItemsFolder = $derived(matches('new items folder', 'workspace files', 'default folder', 'create', 'root'))
   let showWorkspaceFilesGroup = $derived((searching || scope === 'workspace') && showNewItemsFolder)
 
-  let showUiFont = $derived(matches('interface font', 'ui font', 'typography', 'font', 'size', 'sans'))
-  let showBodyFont = $derived(matches('reading font', 'body font', 'typography', 'font', 'size', 'serif', 'palatino', 'georgia'))
-  let showMonoFont = $derived(matches('editor font', 'code font', 'monospace', 'typography', 'font', 'size', 'cascadia', 'jetbrains'))
+  let showUiFont = $derived(matches('interface font', 'ui font', 'typography', 'font', 'size', 'weight', 'sans'))
+  let showBodyFont = $derived(matches('reading font', 'body font', 'typography', 'font', 'size', 'weight', 'serif', 'palatino', 'georgia'))
+  let showMonoFont = $derived(matches('editor font', 'code font', 'monospace', 'typography', 'font', 'size', 'weight', 'cascadia', 'jetbrains'))
   let showTypographyGroup = $derived((searching || scope === 'workspace') && (showUiFont || showBodyFont || showMonoFont))
 
   let showThemeColors = $derived(matches('theme colors', 'color overrides', 'colors', 'accent', 'paper', 'canvas', 'palette', 'swatch', 'markdown', 'heading', 'header', 'blockquote', 'code'))
@@ -357,9 +376,9 @@
               <div class="setting-row">
                 <div class="setting-info">
                   <span class="setting-label">Interface font</span>
-                  <span class="setting-desc">Font family and size for menus, sidebars, and controls.</span>
+                  <span class="setting-desc">Font family, weight, and size for menus, sidebars, and controls.</span>
                 </div>
-                <div class="setting-control">
+                <div class="setting-control setting-control-wrap">
                   <details class="setting-select" bind:open={uiFontMenuOpen}>
                     <summary aria-label="Interface font" aria-disabled={appearanceDisabled} onclick={(event) => { if (appearanceDisabled) event.preventDefault() }}>
                       <span>{fontDisplayLabel(uiFontPresets, appearance.fonts.ui)}</span>
@@ -370,6 +389,19 @@
                         {@const selected = activeFontPreset(uiFontPresets, appearance.fonts.ui)?.id === preset.id}
                         <button class="popup-menu-item" aria-pressed={selected} disabled={appearanceDisabled} onclick={() => { uiFontMenuOpen = false; updateFont('ui', preset.stack) }}>
                           {preset.label}{#if selected}<span class="popup-menu-mark"><Icon name="check" size={14} /></span>{/if}
+                        </button>
+                      {/each}
+                    </PopupMenu>
+                  </details>
+                  <details class="setting-select setting-select-compact" bind:open={uiWeightMenuOpen}>
+                    <summary aria-label="Interface font weight" aria-disabled={appearanceDisabled} onclick={(event) => { if (appearanceDisabled) event.preventDefault() }}>
+                      <span>{weightLabel(appearance.font_weights.ui)}</span>
+                      <Icon name="chevron-down" size={14} />
+                    </summary>
+                    <PopupMenu class="setting-select-menu" label="Interface font weight">
+                      {#each fontWeightOptions as option (option.value)}
+                        <button class="popup-menu-item" aria-pressed={appearance.font_weights.ui === option.value} disabled={appearanceDisabled} onclick={() => { uiWeightMenuOpen = false; updateFontWeight('ui', option.value) }}>
+                          {option.label}{#if appearance.font_weights.ui === option.value}<span class="popup-menu-mark"><Icon name="check" size={14} /></span>{/if}
                         </button>
                       {/each}
                     </PopupMenu>
@@ -386,9 +418,9 @@
               <div class="setting-row">
                 <div class="setting-info">
                   <span class="setting-label">Reading font</span>
-                  <span class="setting-desc">Font family and size for notes in Read mode.</span>
+                  <span class="setting-desc">Font family, weight, and size for notes in Read mode.</span>
                 </div>
-                <div class="setting-control">
+                <div class="setting-control setting-control-wrap">
                   <details class="setting-select" bind:open={bodyFontMenuOpen}>
                     <summary aria-label="Reading font" aria-disabled={appearanceDisabled} onclick={(event) => { if (appearanceDisabled) event.preventDefault() }}>
                       <span>{fontDisplayLabel(bodyFontPresets, appearance.fonts.body)}</span>
@@ -399,6 +431,19 @@
                         {@const selected = activeFontPreset(bodyFontPresets, appearance.fonts.body)?.id === preset.id}
                         <button class="popup-menu-item" aria-pressed={selected} disabled={appearanceDisabled} onclick={() => { bodyFontMenuOpen = false; updateFont('body', preset.stack) }}>
                           {preset.label}{#if selected}<span class="popup-menu-mark"><Icon name="check" size={14} /></span>{/if}
+                        </button>
+                      {/each}
+                    </PopupMenu>
+                  </details>
+                  <details class="setting-select setting-select-compact" bind:open={bodyWeightMenuOpen}>
+                    <summary aria-label="Reading font weight" aria-disabled={appearanceDisabled} onclick={(event) => { if (appearanceDisabled) event.preventDefault() }}>
+                      <span>{weightLabel(appearance.font_weights.body)}</span>
+                      <Icon name="chevron-down" size={14} />
+                    </summary>
+                    <PopupMenu class="setting-select-menu" label="Reading font weight">
+                      {#each fontWeightOptions as option (option.value)}
+                        <button class="popup-menu-item" aria-pressed={appearance.font_weights.body === option.value} disabled={appearanceDisabled} onclick={() => { bodyWeightMenuOpen = false; updateFontWeight('body', option.value) }}>
+                          {option.label}{#if appearance.font_weights.body === option.value}<span class="popup-menu-mark"><Icon name="check" size={14} /></span>{/if}
                         </button>
                       {/each}
                     </PopupMenu>
@@ -415,9 +460,9 @@
               <div class="setting-row">
                 <div class="setting-info">
                   <span class="setting-label">Editor &amp; code font</span>
-                  <span class="setting-desc">Monospace font family and size for Source mode and code blocks.</span>
+                  <span class="setting-desc">Monospace font family, weight, and size for Source mode and code blocks.</span>
                 </div>
-                <div class="setting-control">
+                <div class="setting-control setting-control-wrap">
                   <details class="setting-select" bind:open={monoFontMenuOpen}>
                     <summary aria-label="Editor and code font" aria-disabled={appearanceDisabled} onclick={(event) => { if (appearanceDisabled) event.preventDefault() }}>
                       <span>{fontDisplayLabel(monoFontPresets, appearance.fonts.monospace)}</span>
@@ -428,6 +473,19 @@
                         {@const selected = activeFontPreset(monoFontPresets, appearance.fonts.monospace)?.id === preset.id}
                         <button class="popup-menu-item" aria-pressed={selected} disabled={appearanceDisabled} onclick={() => { monoFontMenuOpen = false; updateFont('monospace', preset.stack) }}>
                           {preset.label}{#if selected}<span class="popup-menu-mark"><Icon name="check" size={14} /></span>{/if}
+                        </button>
+                      {/each}
+                    </PopupMenu>
+                  </details>
+                  <details class="setting-select setting-select-compact" bind:open={monoWeightMenuOpen}>
+                    <summary aria-label="Editor and code font weight" aria-disabled={appearanceDisabled} onclick={(event) => { if (appearanceDisabled) event.preventDefault() }}>
+                      <span>{weightLabel(appearance.font_weights.monospace)}</span>
+                      <Icon name="chevron-down" size={14} />
+                    </summary>
+                    <PopupMenu class="setting-select-menu" label="Editor and code font weight">
+                      {#each fontWeightOptions as option (option.value)}
+                        <button class="popup-menu-item" aria-pressed={appearance.font_weights.monospace === option.value} disabled={appearanceDisabled} onclick={() => { monoWeightMenuOpen = false; updateFontWeight('monospace', option.value) }}>
+                          {option.label}{#if appearance.font_weights.monospace === option.value}<span class="popup-menu-mark"><Icon name="check" size={14} /></span>{/if}
                         </button>
                       {/each}
                     </PopupMenu>

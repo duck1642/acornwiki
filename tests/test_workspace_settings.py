@@ -143,3 +143,31 @@ class WorkspaceSettingsTests(unittest.TestCase):
         path.write_text(json.dumps(settings), encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "appearance contains"):
             load_workspace_settings(root)
+
+    def test_font_weights_defaults_and_legacy_file_compatibility(self) -> None:
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        legacy = default_workspace_settings()
+        appearance = legacy["appearance"]
+        assert isinstance(appearance, dict)
+        del appearance["font_weights"]
+        path = root / ".acornwiki" / "settings.json"
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps(legacy), encoding="utf-8")
+
+        loaded = load_workspace_settings(root)
+        loaded_appearance = loaded["appearance"]
+        assert isinstance(loaded_appearance, dict)
+        self.assertEqual(loaded_appearance["font_weights"], {"ui": 400, "body": 400, "monospace": 400})
+
+        bridge = Bridge()
+        self.addCleanup(bridge._close)
+        snapshot = bridge.open_workspace(str(root))
+        self.addCleanup(lambda: bridge.close_workspace(snapshot["workspace_id"]))
+        bridge.set_workspace_appearance(
+            snapshot["workspace_id"],
+            {"font_weights": {"ui": 500, "body": 400, "monospace": 500}},
+        )
+        updated = load_workspace_settings(root)["appearance"]
+        assert isinstance(updated, dict)
+        self.assertEqual(updated["font_weights"], {"ui": 500, "body": 400, "monospace": 500})

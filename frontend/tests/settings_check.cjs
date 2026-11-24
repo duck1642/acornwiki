@@ -34,8 +34,8 @@ const net = require('node:net');
       let releaseBlocked;
       let failNextBlocked = false;
       const notes = new Map([
-        ['note.md', { content: '# Root\n\n## Child\n\n## Other', version: '1' }],
-        ['other.md', { content: '# Second\n\nText', version: '1' }],
+        ['note.md', { content: '# Root\n\n## Child\n\n## Other\n\n```python\nprint(\'hi\')\n```', version: '1' }],
+        ['other.md', { content: '# Second\n\n- First item\n-\n\nParagraph\n-', version: '1' }],
       ]);
       const items = [
         { name: 'note.md', is_directory: false, modified_time: null },
@@ -58,10 +58,16 @@ const net = require('node:net');
         page_width: '74ch',
         fonts: { ui: ['system-ui'], body: ['serif'], monospace: ['monospace'] },
         font_sizes: { ui: 14, body: 16, monospace: 14 },
+        font_weights: { ui: 400, body: 400, monospace: 400 },
         theme_overrides: {},
         custom_themes: {},
         file_icons: { set: 'minimal', extensions: {} },
       };
+      window.copiedText = '';
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: { writeText: async (text) => { window.copiedText = text; } },
+      });
       window.pywebview = {
         state: new EventTarget(),
         api: {
@@ -159,7 +165,40 @@ const net = require('node:net');
     assert.equal(await page.locator('.note-panel:not(.inactive) .cm-content').evaluate((el) => el.contains(document.activeElement)), true);
     await page.getByRole('button', { name: 'other.md', exact: true }).click();
     await page.locator('.note-outline a', { hasText: 'Second' }).waitFor();
+    // Bullet items and trailing "-" lines must NOT show up as Setext headings in Contents.
     assert.equal(await page.locator('.note-outline a').count(), 1);
+
+    // 5. Editor features: line numbers toggle, fold gutter, Ctrl+B shortcut, click-below focus, Read code highlighting + Copy.
+    await page.getByRole('button', { name: 'note.md', exact: true }).click();
+    await page.locator('.note-panel:not(.inactive) .cm-content').waitFor();
+    assert.equal(await page.locator('.note-panel:not(.inactive) .cm-lineNumbers').count(), 0);
+    assert.equal(await page.locator('.note-panel:not(.inactive) .cm-foldGutter').count(), 1);
+    await page.locator('.view-menu > summary').click();
+    await page.locator('.view-menu-content').getByRole('button', { name: 'Line numbers' }).click();
+    assert.equal(await page.locator('.note-panel:not(.inactive) .cm-lineNumbers').count(), 1);
+    // Click empty area in .note-scroll below editor text to focus editor at end.
+    await page.locator('.note-panel:not(.inactive) .note-scroll').click({ position: { x: 20, y: 500 } });
+    assert.equal(await page.locator('.note-panel:not(.inactive) .cm-content').evaluate((el) => el.contains(document.activeElement)), true);
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('word');
+    await page.keyboard.press('Shift+Home');
+    await page.keyboard.press('Control+b');
+    assert.ok((await page.locator('.note-panel:not(.inactive) .cm-content').innerText()).includes('**word**'));
+    // Read mode highlights Python code block and copies code via Copy button.
+    await page.getByRole('button', { name: 'Read', exact: true }).click();
+    await page.locator('.read-code-block pre code .tok-string').waitFor();
+    await page.locator('.read-code-copy').click();
+    await page.locator('.read-code-copy', { hasText: 'Copied' }).waitFor();
+    assert.equal(await page.evaluate(() => window.copiedText), "print('hi')");
+
+    // 6. Typography font weight selector persists and updates CSS variable.
+    await page.locator('.settings-menu > summary').click();
+    await page.getByRole('button', { name: 'Open Settings' }).click();
+    await page.getByRole('tab', { name: 'Workspace' }).click();
+    await page.locator('.setting-select > summary[aria-label="Reading font weight"]').click();
+    await page.getByRole('button', { name: 'Medium', exact: true }).click();
+    await page.waitForFunction(() => window.appearance.font_weights.body === 500);
+    assert.equal(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--font-weight-body').trim()), '500');
 
     console.log('headless settings and outline checks passed');
   } finally {

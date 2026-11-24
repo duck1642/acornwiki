@@ -6,6 +6,7 @@ export type PageWidthPreset = '74ch' | '96ch' | '100%'
 
 export type AppearanceFonts = { ui: string[]; body: string[]; monospace: string[] }
 export type AppearanceFontSizes = { ui: number; body: number; monospace: number }
+export type AppearanceFontWeights = { ui: number; body: number; monospace: number }
 
 export type AppearancePatch = {
   theme?: ThemeId
@@ -13,6 +14,7 @@ export type AppearancePatch = {
   page_width?: PageWidthPreset
   fonts?: AppearanceFonts
   font_sizes?: AppearanceFontSizes
+  font_weights?: AppearanceFontWeights
 }
 
 export type AppearanceView = {
@@ -21,6 +23,7 @@ export type AppearanceView = {
   page_width: string
   fonts: AppearanceFonts
   font_sizes: AppearanceFontSizes
+  font_weights: AppearanceFontWeights
 }
 
 export type EditorPreferences = {

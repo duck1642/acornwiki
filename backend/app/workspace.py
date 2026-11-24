@@ -40,6 +40,7 @@ def default_workspace_appearance() -> dict[str, object]:
             "monospace": ["monospace"],
         },
         "font_sizes": {"ui": 14, "body": 16, "monospace": 14},
+        "font_weights": {"ui": 400, "body": 400, "monospace": 400},
         "theme_overrides": {},
         "custom_themes": {},
         "file_icons": {"set": "minimal", "extensions": {}},
@@ -179,6 +180,13 @@ def validate_workspace_appearance(appearance: dict[str, object]) -> None:
         if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
             raise ValueError(f"appearance.font_sizes.{name} must be a positive integer")
 
+    font_weights = _object_with_string_keys(appearance["font_weights"])
+    if font_weights is None or font_weights.keys() != {"ui", "body", "monospace"}:
+        raise ValueError("appearance.font_weights must contain ui, body, and monospace")
+    for name, weight in font_weights.items():
+        if isinstance(weight, bool) or not isinstance(weight, int) or not (100 <= weight <= 900):
+            raise ValueError(f"appearance.font_weights.{name} must be an integer between 100 and 900")
+
     overrides = _object_with_string_keys(appearance["theme_overrides"])
     if overrides is None:
         raise ValueError("appearance.theme_overrides must be an object")
@@ -265,6 +273,10 @@ def load_workspace_settings(workspace_root: Path) -> dict[str, object]:
     settings = _object_with_string_keys(json.loads(content))
     if settings is None:
         raise ValueError("Workspace settings must be a JSON object")
+    appearance = _object_with_string_keys(settings.get("appearance"))
+    if appearance is not None and "font_weights" not in appearance:
+        appearance["font_weights"] = {"ui": 400, "body": 400, "monospace": 400}
+        settings["appearance"] = appearance
     validate_workspace_settings(settings)
     return settings
 

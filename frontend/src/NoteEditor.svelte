@@ -2,16 +2,31 @@
   import { onMount, tick, untrack } from 'svelte'
   import { Compartment, EditorState } from '@codemirror/state'
   import { EditorView } from '@codemirror/view'
-  import { basicSetup } from 'codemirror'
-  import { markdown } from '@codemirror/lang-markdown'
-  import { ensureSyntaxTree, HighlightStyle, syntaxHighlighting } from '@codemirror/language'
-  import { tags } from '@lezer/highlight'
-  import { Lexer, marked } from 'marked'
+  import { ensureSyntaxTree } from '@codemirror/language'
+  import { Lexer, Marked } from 'marked'
   import DOMPurify from 'dompurify'
   import Icon from './Icon.svelte'
   import PopupMenu from './PopupMenu.svelte'
   import { openWorkspaceFile } from './fileActions'
+  import { createMarkdownEditorExtensions, highlightCodeElement, lineNumbersExtension } from './markdownEditor'
   import type { EditorPreferences, EditorStatus, FlatOutlineHeading } from './sharedTypes'
+
+  // Require at least 3 underline characters for Setext headings so typing "-" for a bullet list does not turn text into H2.
+  const markdownParser = new Marked({
+    tokenizer: {
+      lheading(src: string) {
+        const cap = /^(?! {0,3}(?:[#>*-]|\d+\.) )((?:.|\n(?!\s*\n))+?)\n {0,3}(={3,}|-{3,})[ \t]*(?:\n+|$)/.exec(src)
+        if (!cap) return undefined
+        return {
+          type: 'heading',
+          raw: cap[0],
+          depth: cap[2].charAt(0) === '=' ? 1 : 2,
+          text: cap[1].trim(),
+          tokens: this.lexer.inline(cap[1].trim()),
+        }
+      },
+    },
+  })
 
   let {
     workspaceId,
@@ -21,6 +36,7 @@
     active,
     freezeEditors = false,
     editorPreferences,
+    showLineNumbers = false,
     canGoBack = false,
     canGoForward = false,
     onNavigateBack,
@@ -36,6 +52,7 @@
     active: boolean
     freezeEditors?: boolean
     editorPreferences: EditorPreferences
+    showLineNumbers?: boolean
     canGoBack?: boolean
     canGoForward?: boolean
     onNavigateBack?: () => void
@@ -49,6 +66,7 @@
   let view: EditorView
   const editableCompartment = new Compartment()
   const readOnlyCompartment = new Compartment()
+  const lineNumbersCompartment = new Compartment()
   let path = $state<string | null>(null)
   let text = $state('')
   let savedText = $state('')
@@ -118,11 +136,19 @@
     ] })
   })
 
+  $effect(() => {
+    const enabled = showLineNumbers
+    const currentView = view
+    if (!currentView) return
+    currentView.dispatch({ effects: lineNumbersCompartment.reconfigure(lineNumbersExtension(enabled)) })
+  })
+
   function extractOutline(html: string): FlatOutlineHeading[] {
     if (!html) return []
     const template = document.createElement('template')
     template.innerHTML = html
     return Array.from(template.content.querySelectorAll<HTMLHeadingElement>('h1, h2, h3, h4, h5, h6'))
+      .filter((heading) => !heading.closest('li, blockquote'))
       .map((heading) => ({ id: heading.id, label: heading.textContent?.trim() ?? '', level: Number(heading.tagName.slice(1)) }))
       .filter((heading) => heading.id && heading.label)
   }
@@ -136,12 +162,12 @@
     const tree = ensureSyntaxTree(view.state, view.state.doc.length, 1000)
     if (!tree || !heading) return
     const positions: number[] = []
-    const links = marked.lexer(text).links
+    const links = markdownParser.lexer(text).links
     tree.iterate({ enter(node) {
       if (!/^(ATX|Setext)Heading[1-6]$/.test(node.name)) return
       const lexer = new Lexer()
       lexer.tokens.links = links
-      const html = marked.parser(lexer.lex(view.state.sliceDoc(node.from, node.to)))
+      const html = markdownParser.parser(lexer.lex(view.state.sliceDoc(node.from, node.to)))
       const template = document.createElement('template')
       template.innerHTML = DOMPurify.sanitize(html)
       const parsed = template.content.querySelector('h1,h2,h3,h4,h5,h6')
@@ -165,7 +191,7 @@
 
   function renderMarkdown(content: string, note: string | null, endpoint: string): string {
     const template = document.createElement('template')
-    template.innerHTML = DOMPurify.sanitize(marked.parse(content, { async: false }))
+    template.innerHTML = DOMPurify.sanitize(markdownParser.parse(content, { async: false }))
     const headings = new Map<string, number>()
     const usedIds = new Set<string>()
     for (const heading of template.content.querySelectorAll('h1,h2,h3,h4,h5,h6')) {
@@ -190,12 +216,42 @@
       const params = new URLSearchParams({ workspace: workspaceId, note, src })
       image.setAttribute('src', `${endpoint}?${params}`)
     }
+    for (const pre of template.content.querySelectorAll('pre')) {
+      const code = pre.querySelector('code')
+      const langMatch = code?.className.match(/\blanguage-([\w+-]+)\b/)
+      const lang = langMatch?.[1] ?? ''
+      const wrapper = document.createElement('div')
+      wrapper.className = 'read-code-block'
+      const header = document.createElement('div')
+      header.className = 'read-code-header'
+      const label = document.createElement('span')
+      label.className = 'read-code-lang'
+      label.textContent = lang || 'code'
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.className = 'read-code-copy'
+      button.textContent = 'Copy'
+      header.append(label, button)
+      pre.parentNode?.insertBefore(wrapper, pre)
+      wrapper.append(header, pre)
+    }
     return template.innerHTML
   }
 
-  async function followLink(event: MouseEvent) {
-    if (event.type === 'auxclick' && event.button !== 1) return
+  async function handleReadClick(event: MouseEvent) {
     const element = event.target as Element
+    const copyButton = element.closest<HTMLButtonElement>('.read-code-copy')
+    if (copyButton && event.type === 'click') {
+      event.preventDefault()
+      const textToCopy = (copyButton.closest('.read-code-block')?.querySelector('pre code')?.textContent ?? '').replace(/\r?\n$/, '')
+      try {
+        await navigator.clipboard.writeText(textToCopy)
+        copyButton.textContent = 'Copied'
+        setTimeout(() => { if (copyButton.isConnected) copyButton.textContent = 'Copy' }, 1500)
+      } catch (reason) { console.error(reason) }
+      return
+    }
+    if (event.type === 'auxclick' && event.button !== 1) return
     const link = element.closest('a')
     if (!link || !path) return
     event.preventDefault()
@@ -227,17 +283,39 @@
     if (event.button === 1 && (event.target as Element).closest('a')) event.preventDefault()
   }
 
-  function linkHandler(node: HTMLElement) {
-    node.addEventListener('click', followLink)
-    node.addEventListener('auxclick', followLink)
+  function highlightReadCodeBlocks(node: HTMLElement) {
+    for (const codeEl of node.querySelectorAll<HTMLElement>('.read-code-block pre code')) {
+      const lang = codeEl.className.match(/\blanguage-([\w+-]+)\b/)?.[1] ?? ''
+      if (lang) void highlightCodeElement(codeEl, lang).catch(console.error)
+    }
+  }
+
+  function linkHandler(node: HTMLElement, _html: string) {
+    node.addEventListener('click', handleReadClick)
+    node.addEventListener('auxclick', handleReadClick)
     node.addEventListener('mousedown', linkMousedown)
+    highlightReadCodeBlocks(node)
     return {
+      update() {
+        highlightReadCodeBlocks(node)
+      },
       destroy: () => {
-        node.removeEventListener('click', followLink)
-        node.removeEventListener('auxclick', followLink)
+        node.removeEventListener('click', handleReadClick)
+        node.removeEventListener('auxclick', handleReadClick)
         node.removeEventListener('mousedown', linkMousedown)
       },
     }
+  }
+
+  function handleSheetMousedown(event: MouseEvent) {
+    if (event.button !== 0 || mode !== 'source' || !path || !view) return
+    const target = event.target as HTMLElement | null
+    if (!target) return
+    if (target.closest('.cm-editor') || target.closest('button, a, input, summary')) return
+    event.preventDefault()
+    const end = view.state.doc.length
+    view.dispatch({ selection: { anchor: end } })
+    view.focus()
   }
 
   function setDocument(content: string) {
@@ -246,33 +324,19 @@
     text = content
   }
 
-  const markdownHighlightStyle = HighlightStyle.define([
-    { tag: tags.heading, color: 'var(--ink)', fontWeight: '700' },
-    { tag: tags.heading1, color: 'var(--ink)', fontWeight: '700' },
-    { tag: tags.heading2, color: 'var(--ink)', fontWeight: '700' },
-    { tag: tags.heading3, color: 'var(--ink)', fontWeight: '650' },
-    { tag: tags.strong, color: 'var(--ink)', fontWeight: '700' },
-    { tag: tags.emphasis, color: 'var(--ink)', fontStyle: 'italic' },
-    { tag: tags.strikethrough, color: 'var(--ink-muted)', textDecoration: 'line-through' },
-    { tag: tags.link, color: 'var(--link)', textDecoration: 'underline' },
-    { tag: tags.url, color: 'var(--link)' },
-    { tag: tags.quote, color: 'var(--ink-muted)', fontStyle: 'italic' },
-    { tag: tags.monospace, color: 'var(--accent)' },
-    { tag: [tags.processingInstruction, tags.punctuation, tags.meta, tags.contentSeparator], color: 'var(--ink-faint)' },
-    { tag: [tags.keyword, tags.operator, tags.typeName, tags.labelName], color: 'var(--warn)' },
-    { tag: [tags.string, tags.special(tags.string)], color: 'var(--accent)' },
-    { tag: [tags.comment], color: 'var(--ink-faint)', fontStyle: 'italic' },
-    { tag: [tags.number, tags.bool, tags.atom], color: 'var(--link)' },
-  ])
-
   function extensions() {
-    return [basicSetup, markdown(), syntaxHighlighting(markdownHighlightStyle), EditorView.lineWrapping, editableCompartment.of(EditorView.editable.of(!prompt && !freezeEditors)), readOnlyCompartment.of(EditorState.readOnly.of(prompt || freezeEditors)), EditorView.updateListener.of((update) => {
-      if (update.docChanged) {
-        text = update.state.sliceDoc()
-        message = ''
-        scheduleSave()
-      }
-    })]
+    return createMarkdownEditorExtensions([
+      lineNumbersCompartment.of(lineNumbersExtension(showLineNumbers)),
+      editableCompartment.of(EditorView.editable.of(!prompt && !freezeEditors)),
+      readOnlyCompartment.of(EditorState.readOnly.of(prompt || freezeEditors)),
+      EditorView.updateListener.of((update) => {
+        if (update.docChanged) {
+          text = update.state.sliceDoc()
+          message = ''
+          scheduleSave()
+        }
+      }),
+    ])
   }
 
   onMount(() => {
@@ -367,7 +431,7 @@
         savedText = content
         conflict = false
         missing = false
-        message = text === content ? 'Saved.' : ''
+        message = ''
         if (text !== savedText) scheduleSave()
         return true
       } catch (reason) {
@@ -493,7 +557,8 @@
       </details>
     {/if}
   </div>
-  <div class="note-scroll">
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="note-scroll" onmousedown={handleSheetMousedown}>
     <div class="note-sheet">
       {#if !path}
         <div class="note-empty-state">
@@ -502,7 +567,7 @@
         </div>
       {/if}
       <div class="note-content" hidden={!path || mode !== 'source'} bind:this={host}></div>
-      {#if path && mode === 'read'}<article class="note-content note-read" use:linkHandler>{@html rendered}</article>{/if}
+      {#if path && mode === 'read'}<article class="note-content note-read" use:linkHandler={rendered}>{@html rendered}</article>{/if}
     </div>
   </div>
   {#if message || error || conflict || prompt}

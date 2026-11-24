@@ -2,6 +2,7 @@
   import type {
     AppearanceFonts,
     AppearanceFontSizes,
+    AppearanceFontWeights,
     AppearancePatch,
     AppearanceView,
     EditorPreferences,
@@ -32,6 +33,7 @@
     page_width?: string
     fonts?: Partial<AppearanceFonts>
     font_sizes?: Partial<AppearanceFontSizes>
+    font_weights?: Partial<AppearanceFontWeights>
     file_icons: { set: string; extensions: Record<string, string> }
   }
   type AppearanceState = AppearanceView & {
@@ -93,6 +95,7 @@
     page_width: '74ch',
     fonts: { ui: ['system-ui'], body: ['serif'], monospace: ['monospace'] },
     font_sizes: { ui: 14, body: 16, monospace: 14 },
+    font_weights: { ui: 400, body: 400, monospace: 400 },
     file_icons: { set: 'minimal', extensions: {} },
   }
   const genericFontFamilies = new Set(['serif', 'sans-serif', 'monospace', 'cursive', 'fantasy', 'system-ui', '-apple-system', 'ui-sans-serif', 'ui-serif', 'ui-monospace'])
@@ -142,6 +145,7 @@
   let effectiveSurface = $derived(sessionSurface ?? appearance.surface_mode)
   let effectivePageWidth = $derived(sessionPageWidth ?? appearance.page_width)
   let viewMenuOpen = $state(false)
+  let showLineNumbers = $state(false)
   let appearanceSaving = $state(false)
   let settingsOpen = $state(false)
   let filePanelOpen = $state(true)
@@ -246,6 +250,9 @@
     root.style.setProperty('--font-size-ui', `${appearance.font_sizes.ui}px`)
     root.style.setProperty('--font-size-body', `${appearance.font_sizes.body}px`)
     root.style.setProperty('--font-size-mono', `${appearance.font_sizes.monospace}px`)
+    root.style.setProperty('--font-weight-ui', String(appearance.font_weights.ui))
+    root.style.setProperty('--font-weight-body', String(appearance.font_weights.body))
+    root.style.setProperty('--font-weight-mono', String(appearance.font_weights.monospace))
   })
 
   $effect(() => {
@@ -749,6 +756,7 @@
     const pageWidth = widthMatch && Number(widthMatch[1]) > 0 ? rawWidth : defaultAppearance.page_width
     const normalizeStack = (raw: unknown, fallback: string[]) => (Array.isArray(raw) && raw.every((item) => typeof item === 'string') && raw.length ? [...raw] : [...fallback])
     const normalizeSize = (raw: unknown, fallback: number) => (typeof raw === 'number' && Number.isInteger(raw) && raw > 0 ? raw : fallback)
+    const normalizeWeight = (raw: unknown, fallback: number) => (typeof raw === 'number' && Number.isInteger(raw) && raw >= 100 && raw <= 900 ? raw : fallback)
     return {
       theme: value.theme === 'warm-paper' ? 'warm-paper' : 'warm-charcoal',
       surface_mode: value.surface_mode === 'seamless' ? 'seamless' : 'framed',
@@ -762,6 +770,11 @@
         ui: normalizeSize(value.font_sizes?.ui, defaultAppearance.font_sizes.ui),
         body: normalizeSize(value.font_sizes?.body, defaultAppearance.font_sizes.body),
         monospace: normalizeSize(value.font_sizes?.monospace, defaultAppearance.font_sizes.monospace),
+      },
+      font_weights: {
+        ui: normalizeWeight(value.font_weights?.ui, defaultAppearance.font_weights.ui),
+        body: normalizeWeight(value.font_weights?.body, defaultAppearance.font_weights.body),
+        monospace: normalizeWeight(value.font_weights?.monospace, defaultAppearance.font_weights.monospace),
       },
       file_icons: value.file_icons,
     }
@@ -1003,6 +1016,8 @@
             <button class="popup-menu-item" aria-pressed={effectivePageWidth === preset.value} title={preset.title} onclick={() => { sessionPageWidth = preset.value; viewMenuOpen = false }}>{preset.label}{#if effectivePageWidth === preset.value}<span class="popup-menu-mark"><Icon name="check" size={14} /></span>{/if}</button>
           {/each}
           <div class="popup-menu-divider"></div>
+          <button class="popup-menu-item" aria-pressed={showLineNumbers} onclick={() => { showLineNumbers = !showLineNumbers; viewMenuOpen = false }}>Line numbers{#if showLineNumbers}<span class="popup-menu-mark"><Icon name="check" size={14} /></span>{/if}</button>
+          <div class="popup-menu-divider"></div>
           <button class="popup-menu-item" onclick={() => { sessionSurface = null; sessionPageWidth = null; viewMenuOpen = false }}>Use workspace default</button>
         </PopupMenu>
       </details>
@@ -1195,6 +1210,7 @@
               workspaceId={workspaceId ?? ''}
               {workspaceName}
               {editorPreferences}
+              {showLineNumbers}
               {canGoBack}
               {canGoForward}
               onNavigateBack={navigateBack}
