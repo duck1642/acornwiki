@@ -156,7 +156,9 @@
   let searching = $derived(normalizedQuery.length > 0)
 
   async function addBlockedExtension() {
-    const raw = newExtension.split(/[\s,]+/).map((item) => item.trim().toLowerCase()).filter(Boolean)
+    if (!editorPreferencesLoaded || blockedSaving) return
+    const submitted = newExtension
+    const raw = submitted.split(/[\s,]+/).map((item) => item.trim().toLowerCase()).filter(Boolean)
     if (!raw.length) return
     const normalized = raw.map((token) => (token.startsWith('.') ? token : `.${token}`))
     const saved = await onUpdateBlockedExtensions((current) => {
@@ -168,10 +170,11 @@
       })
       return additions.length ? [...current, ...additions] : current
     })
-    if (saved) newExtension = ''
+    if (saved && newExtension === submitted) newExtension = ''
   }
 
   async function removeBlockedExtension(target: string) {
+    if (!editorPreferencesLoaded || blockedSaving) return
     await onUpdateBlockedExtensions((current) => current.filter((item) => item !== target))
   }
 
@@ -661,12 +664,15 @@
                     class="setting-input setting-ext-input"
                     type="text"
                     placeholder=".exe"
+                    disabled={!editorPreferencesLoaded}
                     bind:value={newExtension}
                   />
-                  <button class="text-button" type="submit" disabled={blockedSaving || !newExtension.trim()}>Add</button>
+                  <button class="text-button" type="submit" disabled={!editorPreferencesLoaded || blockedSaving || !newExtension.trim()}>Add</button>
                 </form>
               </div>
-              {#if blockedList.length}
+              {#if !editorPreferencesLoaded}
+                <p class="setting-desc">Loading blocked extensions...</p>
+              {:else if blockedList.length}
                 <div class="extension-chips" role="list" aria-label="Blocked extensions">
                   {#each blockedList as ext (ext)}
                     <span class="extension-chip" role="listitem">
@@ -676,7 +682,7 @@
                         class="extension-chip-remove"
                         aria-label={`Remove ${ext}`}
                         title={`Remove ${ext}`}
-                        disabled={blockedSaving}
+                        disabled={!editorPreferencesLoaded || blockedSaving}
                         onclick={() => void removeBlockedExtension(ext)}
                       ><Icon name="x" size={11} /></button>
                     </span>

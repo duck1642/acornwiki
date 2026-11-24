@@ -732,7 +732,7 @@
   function updateBlockedExtensions(transform: (current: string[]) => string[]): Promise<boolean> {
     const run = blockedSaveQueue.then(async () => {
       const api = window.pywebview?.api
-      if (!api) return false
+      if (!api || !editorPreferencesLoaded) return false
       const current = blockedExtensions.split(/[\s,]+/).map((item) => item.trim()).filter(Boolean)
       const next = transform(current)
       if (next.length === current.length && next.every((item, index) => item === current[index])) return true
