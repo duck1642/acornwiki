@@ -111,10 +111,19 @@ export const acornEditorTheme = EditorView.theme({
     color: 'var(--ink-faint)',
     borderRight: '0',
     marginRight: '6px',
+    userSelect: 'none',
   },
   '.cm-lineNumbers': {
-    paddingRight: '8px',
-    borderRight: '1px solid color-mix(in srgb, var(--border) 60%, transparent)',
+    minWidth: '2.4ch',
+    paddingTop: '1px',
+    paddingRight: '2px',
+    fontSize: '0.88em',
+    lineHeight: 'calc(1.7 / 0.88)',
+    fontVariantNumeric: 'tabular-nums',
+  },
+  '.cm-lineNumbers .cm-gutterElement': {
+    padding: '0 4px',
+    cursor: 'pointer',
   },
   '.cm-foldGutter': {
     width: '16px',
@@ -131,10 +140,13 @@ export const acornEditorTheme = EditorView.theme({
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
-    opacity: '0.45',
+    opacity: '0',
+  },
+  '.cm-gutters:hover .cm-fold-chevron.open': {
+    opacity: '0.6',
   },
   '.cm-fold-chevron:not(.open)': {
-    opacity: '0.85',
+    opacity: '0.9',
     color: 'var(--ink-muted)',
   },
   '.cm-foldGutter .cm-gutterElement:hover .cm-fold-chevron': {
@@ -143,7 +155,8 @@ export const acornEditorTheme = EditorView.theme({
   },
   '.cm-activeLineGutter': {
     backgroundColor: 'transparent',
-    color: 'var(--ink-muted)',
+    color: 'var(--ink)',
+    fontWeight: '600',
   },
   '.cm-selectionMatch': {
     backgroundColor: 'color-mix(in srgb, var(--accent) 18%, transparent)',
@@ -234,8 +247,44 @@ export const acornEditorTheme = EditorView.theme({
   },
 })
 
+function selectLineRange(view: EditorView, anchorFrom: number, targetFrom: number): void {
+  const doc = view.state.doc
+  const anchorLine = doc.lineAt(Math.max(0, Math.min(anchorFrom, doc.length)))
+  const targetLine = doc.lineAt(Math.max(0, Math.min(targetFrom, doc.length)))
+  const lineEnd = (line: { number: number; to: number }) => (line.number < doc.lines ? line.to + 1 : line.to)
+  const selection = targetLine.from >= anchorLine.from
+    ? EditorSelection.single(anchorLine.from, lineEnd(targetLine))
+    : EditorSelection.single(lineEnd(anchorLine), targetLine.from)
+  view.dispatch({ selection })
+}
+
+const interactiveLineNumbers = lineNumbers({
+  domEventHandlers: {
+    mousedown(view, block, event) {
+      if (!(event instanceof MouseEvent) || event.button !== 0) return false
+      event.preventDefault()
+      const anchorPos = event.shiftKey ? view.state.selection.main.anchor : block.from
+      selectLineRange(view, anchorPos, block.from)
+      view.focus()
+
+      const onMove = (moveEvent: MouseEvent) => {
+        if (!view.dom.isConnected) { cleanup(); return }
+        const hovered = view.lineBlockAtHeight(moveEvent.clientY - view.documentTop)
+        selectLineRange(view, anchorPos, hovered.from)
+      }
+      const cleanup = () => {
+        window.removeEventListener('mousemove', onMove)
+        window.removeEventListener('mouseup', cleanup)
+      }
+      window.addEventListener('mousemove', onMove)
+      window.addEventListener('mouseup', cleanup)
+      return true
+    },
+  },
+})
+
 export function lineNumbersExtension(enabled: boolean): Extension {
-  return enabled ? [lineNumbers(), highlightActiveLineGutter()] : []
+  return enabled ? [interactiveLineNumbers, highlightActiveLineGutter()] : []
 }
 
 export function wordWrapExtension(enabled: boolean): Extension {
@@ -324,7 +373,9 @@ export function replaceEditorDocument(
 export function createBaseEditorExtensions(
   extra: Extension[],
   extraKeymap: readonly KeyBinding[] = [],
+  options: { foldGutter?: boolean } = {},
 ): Extension[] {
+  const showFoldGutter = options.foldGutter ?? true
   return [
     history(),
     drawSelection(),
@@ -335,7 +386,7 @@ export function createBaseEditorExtensions(
     closeBrackets(),
     highlightActiveLine(),
     highlightSelectionMatches(),
-    foldGutter({ markerDOM: createFoldMarker }),
+    ...(showFoldGutter ? [foldGutter({ markerDOM: createFoldMarker })] : []),
     search({ top: true }),
     syntaxHighlighting(acornHighlightStyle),
     acornEditorTheme,

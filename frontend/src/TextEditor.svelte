@@ -156,7 +156,7 @@
           session.onEditorTextChange(noteText(update.state))
         }
       }),
-    ])
+    ], [], { foldGutter: languageDesc !== null })
   }
 
   function handleHostMousedown(event: MouseEvent) {

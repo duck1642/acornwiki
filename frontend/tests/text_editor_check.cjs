@@ -177,9 +177,30 @@ const net = require('node:net');
     assert.equal(await page.getByRole('button', { name: 'Toggle contents panel' }).isDisabled(), true);
     // Lazy-loaded Python syntax highlighting produces styled spans inside .cm-content.
     await pyPanel.locator('.cm-content span[class^="ͼ"]').first().waitFor();
-    // Opaque sticky gutter background (#4) and selected tree item accent color (#6).
+    // Opaque sticky gutter background (#4), borderless VS Code line numbers, click-to-select line, and selected tree item accent color (#6).
     const gutterBg = await pyPanel.locator('.cm-gutters').evaluate((el) => getComputedStyle(el).backgroundColor);
     assert.notEqual(gutterBg, 'rgba(0, 0, 0, 0)');
+    const lineNumBorder = await pyPanel.locator('.cm-lineNumbers').evaluate((el) => getComputedStyle(el).borderRightStyle);
+    assert.equal(lineNumBorder, 'none');
+    const alignDiff = await pyPanel.evaluate((root) => {
+      const g = [...root.querySelectorAll('.cm-lineNumbers .cm-gutterElement')]
+        .find((el) => getComputedStyle(el).visibility !== 'hidden' && el.textContent.trim() === '1');
+      const l = root.querySelector('.cm-content .cm-line');
+      const gRange = document.createRange();
+      gRange.selectNodeContents(g);
+      const walker = document.createTreeWalker(l, NodeFilter.SHOW_TEXT);
+      const textNode = walker.nextNode();
+      const lRange = document.createRange();
+      lRange.setStart(textNode, 0);
+      lRange.setEnd(textNode, Math.min(4, textNode.textContent.length));
+      const gRect = gRange.getBoundingClientRect();
+      const lRect = lRange.getBoundingClientRect();
+      return Math.abs(((gRect.top + gRect.bottom) / 2) - ((lRect.top + lRect.bottom) / 2));
+    });
+    assert.ok(alignDiff <= 0.5, `Expected line number vertically aligned with text, got ${alignDiff}px offset`);
+    await pyPanel.locator('.cm-lineNumbers .cm-gutterElement', { hasText: '1' }).first().click();
+    const selectedLine = await page.evaluate(() => window.getSelection()?.toString() ?? '');
+    assert.ok(selectedLine.includes('def greet():'), `Expected full first line selected, got: ${JSON.stringify(selectedLine)}`);
     await page.mouse.move(600, 400);
     const pyTreeColor = await page.getByRole('button', { name: 'helper.py', exact: true }).evaluate((el) => getComputedStyle(el).color);
     const mdTreeColor = await page.getByRole('button', { name: 'note.md', exact: true }).evaluate((el) => getComputedStyle(el).color);

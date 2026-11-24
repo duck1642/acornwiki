@@ -731,10 +731,13 @@ a:focus-visible {
   padding: 12px 16px 36px 0;
 }
 .text-editor-host .cm-gutters {
-  padding-left: 12px;
+  padding-left: 4px;
 }
 .text-editor-host .cm-content {
-  padding-left: 4px;
+  padding-left: 2px;
+}
+.text-editor-host .cm-scroller:not(:has(.cm-gutters)) .cm-content {
+  padding-left: 16px;
 }
 .text-editor-host .cm-panels {
   margin: 8px 12px 4px;
