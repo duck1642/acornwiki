@@ -149,6 +149,28 @@
   let showRightPanel = $derived(Boolean(selectedNote) && outlineOpen)
   let filesWidth = $state(264)
   let contentsWidth = $state(224)
+  let layoutWidth = $state(0)
+  const activityWidth = 42
+  const minimumEditorWidth = 300
+  const minimumFilesWidth = 180
+  const minimumContentsWidth = 160
+  // Preserve the chosen widths while the available space temporarily constrains the panels.
+  let panelWidths = $derived.by(() => {
+    if (layoutWidth <= 720) return { files: filesWidth, contents: contentsWidth }
+    const available = layoutWidth - activityWidth - minimumEditorWidth
+    const files = filePanelOpen ? Math.min(filesWidth, available - (showRightPanel ? minimumContentsWidth : 0)) : 0
+    const contents = showRightPanel ? Math.min(contentsWidth, available - files) : 0
+    return { files, contents }
+  })
+
+  function resizePanel(side: 'left' | 'right', width: number) {
+    const available = layoutWidth - activityWidth - minimumEditorWidth
+    if (side === 'left') {
+      filesWidth = Math.max(minimumFilesWidth, Math.min(width, available - panelWidths.contents))
+    } else {
+      contentsWidth = Math.max(minimumContentsWidth, Math.min(width, available - panelWidths.files))
+    }
+  }
   let latestRevision = -1
   let sortMode = $state<SortMode>('alphabetic')
   let sortMenuOpen = $state(false)
@@ -985,7 +1007,7 @@
     <button class="menu-sidebar-toggle menu-sidebar-toggle-right" onclick={toggleOutlinePanel} disabled={!selectedNote} aria-label="Toggle contents panel" aria-pressed={outlineOpen} title="Toggle contents panel"><Icon name={outlineOpen ? 'panel-right' : 'panel-right-closed'} /></button>
   </header>
 
-  <div class="workspace-layout" class:files-hidden={!filePanelOpen} class:outline-open={showRightPanel} style:--files-width={`${filesWidth}px`} style:--contents-width={`${contentsWidth}px`}>
+  <div class="workspace-layout" class:files-hidden={!filePanelOpen} class:outline-open={showRightPanel} bind:clientWidth={layoutWidth} style:--files-width={`${panelWidths.files}px`} style:--contents-width={`${panelWidths.contents}px`}>
     <nav class="activity-bar" aria-label="Application tools">
       <button class="activity-button" class:active={filePanelOpen} onclick={() => filePanelOpen = true} aria-label="Files" aria-pressed={filePanelOpen} title="Files"><Icon name="folder" /></button>
       <button class="activity-button" disabled aria-label="Graph view" title="Graph view is not available yet"><Icon name="network" /></button>
@@ -1097,7 +1119,7 @@
         {:else}
           <p class="tree-status-message">Choose a workspace below to see its files.</p>
         {/if}
-        <PanelResizeHandle side="left" width={filesWidth} onresize={(width) => filesWidth = width} />
+        <PanelResizeHandle side="left" width={panelWidths.files} onresize={(width) => resizePanel('left', width)} />
         <footer class="sidebar-footer">
           <details bind:this={workspacePicker} class="workspace-picker">
             <summary title={selectedWorkspace ?? 'Select workspace'}><span>{workspaceName || 'Select workspace'}</span><Icon name="chevron-down" size={16} /></summary>
@@ -1243,7 +1265,7 @@
 
     {#if showRightPanel}
       <aside class="note-outline" aria-label="Contents">
-        <PanelResizeHandle side="right" width={contentsWidth} onresize={(width) => contentsWidth = width} />
+        <PanelResizeHandle side="right" width={panelWidths.contents} onresize={(width) => resizePanel('right', width)} />
         <div class="outline-heading">
           <h2 class="outline-title">Contents</h2>
           <button class="outline-collapse-all" aria-label={filterIsActive || allOutlineExpanded ? 'Collapse all headings' : 'Expand all headings'} title={filterIsActive ? 'Clear the filter to change heading expansion' : allOutlineExpanded ? 'Collapse all headings' : 'Expand all headings'} aria-expanded={filterIsActive || allOutlineExpanded} disabled={expandableOutlineIds.length === 0 || filterIsActive} onclick={toggleAllOutline}><Icon name={filterIsActive || allOutlineExpanded ? 'collapse' : 'expand'} size={16} /></button>

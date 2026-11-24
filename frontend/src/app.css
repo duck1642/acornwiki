@@ -675,10 +675,6 @@ a:focus-visible {
 .empty-state p { margin: 0; font-size: 13px; }
 
 @media (max-width: 900px) {
-  .workspace-layout { grid-template-columns: 42px minmax(190px, 228px) minmax(0, 1fr); }
-  .workspace-layout.outline-open { grid-template-columns: 42px minmax(190px, 228px) minmax(0, 1fr) 186px; }
-  .workspace-layout.files-hidden { grid-template-columns: 42px minmax(0, 1fr); }
-  .workspace-layout.files-hidden.outline-open { grid-template-columns: 42px minmax(0, 1fr) 186px; }
   .appearance-group button { padding-right: 7px; padding-left: 7px; font-size: 10px; }
   .note-sheet { padding: 25px 28px 36px; }
   .document-tab { max-width: 205px; }
