@@ -74,6 +74,7 @@
   import { fileIconFor as classifyFileIcon, isFileIconId } from './fileIcons'
   import { setFileIconColors } from './fileIconColors'
   import NoteEditor from './NoteEditor.svelte'
+  import SettingsView from './SettingsView.svelte'
   import { openWorkspaceFile } from './fileActions'
   import { planMoveLinks } from './markdownLinkPlan'
 
@@ -1200,55 +1201,28 @@
             />
           {/each}
           {#if settingsTabOpen}
-            <section class="settings-tab" class:inactive={!settingsTabActive} aria-label="Settings" aria-hidden={!settingsTabActive} inert={!settingsTabActive}>
-              <header class="settings-tab-heading"><h1>Settings</h1><p>Application and workspace preferences</p></header>
-              <div class="settings-tab-scroll">
-                {#if settingsMessage}<p class="settings-message" role="alert">{settingsMessage}</p>{/if}
-                <section class="settings-section">
-                  <h2>Editor</h2>
-                  <label><input type="checkbox" checked={editorPreferences.autosave} disabled={!editorPreferencesLoaded || editorPreferenceSaving.autosave} onchange={(event) => setEditorPreference('autosave', event.currentTarget)} /> Save changes automatically</label>
-                  <label><input type="checkbox" checked={editorPreferences.auto_reload} disabled={!editorPreferencesLoaded || editorPreferenceSaving.auto_reload} onchange={(event) => setEditorPreference('auto_reload', event.currentTarget)} /> Reload notes when the disk version changes and there are no local edits</label>
-                  <label><input type="checkbox" checked={editorPreferences.reload_notice} disabled={!editorPreferencesLoaded || editorPreferenceSaving.reload_notice} onchange={(event) => setEditorPreference('reload_notice', event.currentTarget)} /> Show a notice after reloading a changed note</label>
-                </section>
-                <section class="settings-section">
-                  <h2>Appearance</h2>
-                  <div class="settings-appearance-row"><span>Theme</span><div class="appearance-group" role="group" aria-label="Theme">
-                    <button class:active={appearance.theme === 'warm-charcoal'} aria-pressed={appearance.theme === 'warm-charcoal'} disabled={!workspaceId || appearanceSaving} onclick={() => setAppearance({ theme: 'warm-charcoal' })}>Warm Charcoal</button>
-                    <button class:active={appearance.theme === 'warm-paper'} aria-pressed={appearance.theme === 'warm-paper'} disabled={!workspaceId || appearanceSaving} onclick={() => setAppearance({ theme: 'warm-paper' })}>Warm Paper</button>
-                  </div></div>
-                  <div class="settings-appearance-row"><span>Default document surface</span><div class="appearance-group surface-group" role="group" aria-label="Default document surface">
-                    <button class:active={appearance.surface_mode === 'framed'} aria-pressed={appearance.surface_mode === 'framed'} disabled={!workspaceId || appearanceSaving} onclick={() => setAppearance({ surface_mode: 'framed' })}>Framed</button>
-                    <button class:active={appearance.surface_mode === 'seamless'} aria-pressed={appearance.surface_mode === 'seamless'} disabled={!workspaceId || appearanceSaving} onclick={() => setAppearance({ surface_mode: 'seamless' })}>Seamless</button>
-                  </div></div>
-                  <div class="settings-appearance-row"><span>Default page width</span><div class="appearance-group width-group" role="group" aria-label="Default page width">
-                    {#each pageWidthPresets as preset (preset.value)}
-                      <button class:active={appearance.page_width === preset.value} aria-pressed={appearance.page_width === preset.value} disabled={!workspaceId || appearanceSaving} title={preset.title} onclick={() => setAppearance({ page_width: preset.value })}>{preset.label}</button>
-                    {/each}
-                  </div></div>
-                </section>
-                <section class="settings-section">
-                  <h2>Workspace files</h2>
-                  <p>Default folder for new notes and folders, relative to the workspace. Use . for the workspace root.</p>
-                  <label>New items folder <input aria-label="New items folder" type="text" bind:value={creationFolderInput} disabled={!workspaceId} /></label>
-                  <button class="text-button" onclick={saveCreationFolder} disabled={!workspaceId}>Save folder</button>
-                  {#if folderSettingsMessage}<p role="status" class="settings-message">{folderSettingsMessage}</p>{/if}
-                </section>
-                <section class="settings-section">
-                  <h2>File access</h2>
-                  <p>Extensions listed here stay visible in the file tree but cannot be opened directly.</p>
-                  <label class="settings-blocked-label">Blocked extensions <textarea bind:value={blockedExtensions} rows="4" placeholder=".exe, .bat"></textarea></label>
-                  <button class="text-button" onclick={saveBlockedExtensions}>Save extensions</button>
-                  {#if blockedMessage}<p role="status" class="settings-message">{blockedMessage}</p>{/if}
-                </section>
-                <section class="settings-section">
-                  <h2>Connection</h2>
-                  <div class="settings-connection-row">
-                    <p class="connection-status" aria-live="polite"><span class="connection-dot" class:connected={ready}></span>{message}</p>
-                    <button class="text-button" onclick={ping} disabled={!ready}>Check connection</button>
-                  </div>
-                </section>
-              </div>
-            </section>
+            <SettingsView
+              active={settingsTabActive}
+              {workspaceId}
+              {appearance}
+              {appearanceSaving}
+              {pageWidthPresets}
+              {editorPreferences}
+              {editorPreferencesLoaded}
+              {editorPreferenceSaving}
+              {settingsMessage}
+              bind:creationFolderInput
+              {folderSettingsMessage}
+              bind:blockedExtensions
+              {blockedMessage}
+              {ready}
+              connectionMessage={message}
+              onSetAppearance={setAppearance}
+              onSetEditorPreference={setEditorPreference}
+              onSaveCreationFolder={saveCreationFolder}
+              onSaveBlockedExtensions={saveBlockedExtensions}
+              onPing={ping}
+            />
           {/if}
         </div>
       {:else if workspaceId}
