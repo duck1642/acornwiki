@@ -1,4 +1,16 @@
 <script module lang="ts">
+  import type {
+    AppearanceFonts,
+    AppearanceFontSizes,
+    AppearancePatch,
+    AppearanceView,
+    EditorPreferences,
+    EditorStatus,
+    FlatOutlineHeading,
+    PageWidthPreset,
+    SurfaceMode,
+  } from './sharedTypes'
+
   type SortMode = 'alphabetic' | 'alphabetic_desc' | 'modified' | 'modified_asc' | 'created' | 'created_asc'
   type FileTreeItem = { name: string; is_directory: boolean; modified_time: number | null; created_time?: number | null }
   type DirectorySnapshot = {
@@ -14,15 +26,6 @@
     | { kind: 'status'; path: string; message: string; depth: number; error: boolean }
   type NoteSnapshot = { path: string; content: string; version: string }
   type NoteTab = { key: string; path: string }
-  type EditorPreferences = { autosave: boolean; auto_reload: boolean; reload_notice: boolean }
-  type EditorStatus = { dirty: boolean; saving: boolean; conflict: boolean }
-  type FlatOutlineHeading = { id: string; label: string; level: number }
-  type OutlineHeading = FlatOutlineHeading & { children: OutlineHeading[] }
-  type ThemeId = 'warm-charcoal' | 'warm-paper'
-  type SurfaceMode = 'framed' | 'seamless'
-  type PageWidthPreset = '74ch' | '96ch' | '100%'
-  type AppearanceFonts = { ui: string[]; body: string[]; monospace: string[] }
-  type AppearanceFontSizes = { ui: number; body: number; monospace: number }
   type WorkspaceAppearance = {
     theme: string
     surface_mode: string
@@ -31,19 +34,7 @@
     font_sizes?: Partial<AppearanceFontSizes>
     file_icons: { set: string; extensions: Record<string, string> }
   }
-  type AppearancePatch = {
-    theme?: ThemeId
-    surface_mode?: SurfaceMode
-    page_width?: PageWidthPreset
-    fonts?: AppearanceFonts
-    font_sizes?: AppearanceFontSizes
-  }
-  type AppearanceState = {
-    theme: ThemeId
-    surface_mode: SurfaceMode
-    page_width: string
-    fonts: AppearanceFonts
-    font_sizes: AppearanceFontSizes
+  type AppearanceState = AppearanceView & {
     file_icons: WorkspaceAppearance['file_icons']
   }
   type TreeApi = {
@@ -91,6 +82,7 @@
   import { fileIconFor as classifyFileIcon, isFileIconId } from './fileIcons'
   import { setFileIconColors } from './fileIconColors'
   import NoteEditor from './NoteEditor.svelte'
+  import OutlinePanel from './OutlinePanel.svelte'
   import SettingsView from './SettingsView.svelte'
   import { openWorkspaceFile } from './fileActions'
   import { planMoveLinks } from './markdownLinkPlan'
@@ -154,10 +146,7 @@
   let settingsOpen = $state(false)
   let filePanelOpen = $state(true)
   let outlineOpen = $state(true)
-  let outlineFilter = $state('')
   let tabOutlines = $state<Record<string, FlatOutlineHeading[]>>({})
-  let expandedOutlineIds = $state<string[]>([])
-  let lastOutlineSignature = ''
   let workspacePicker: HTMLDetailsElement | undefined = $state()
   let noteTabs = $state<NoteTab[]>([])
   let activeTabKey = $state<string | null>(null)
@@ -179,12 +168,8 @@
   let canGoForward = $derived(navIndex >= 0 && navIndex < navHistory.length - 1)
   let settingsTabActive = $derived(activeTabKey === settingsTabKey)
   let openTabs = $derived(noteTabs.length > 0 || settingsTabOpen)
-  let activeOutline = $derived(activeTabKey && activeTabKey !== settingsTabKey ? (tabOutlines[activeTabKey] ?? []) : [])
-  let outlineTree = $derived(buildOutlineTree(activeOutline))
-  let filterIsActive = $derived(Boolean(outlineFilter.trim()))
-  let filteredOutline = $derived(filterOutline(outlineTree, outlineFilter.trim().toLowerCase()))
-  let expandableOutlineIds = $derived(collectExpandableIds(outlineTree))
-  let allOutlineExpanded = $derived(expandableOutlineIds.length > 0 && expandableOutlineIds.every((id) => expandedOutlineIds.includes(id)))
+  let activeNoteKey = $derived(activeTabKey && activeTabKey !== settingsTabKey && selectedNote ? activeTabKey : null)
+  let activeOutline = $derived(activeNoteKey ? tabOutlines[activeNoteKey] : undefined)
   let showRightPanel = $derived(Boolean(selectedNote) && outlineOpen)
   let filesWidth = $state(264)
   let contentsWidth = $state(224)
@@ -230,9 +215,7 @@
   let visibleTree = $derived(buildVisibleTree())
   let rootDirectory = $derived(directories[''])
   let workspaceLoadingPending = $derived(loadingWorkspace || Boolean(rootDirectory?.loading && rootDirectory.items === null))
-  let outlineLoadingPending = $derived(Boolean(selectedNote && activeTabKey && !(activeTabKey in tabOutlines)))
   let showWorkspaceLoading = $state(false)
-  let showOutlineLoading = $state(false)
   const rowHeight = 28
   const overscan = 8
   let scrollTop = $state(0)
@@ -244,14 +227,6 @@
   $effect(() => {
     if (!workspaceLoadingPending) { showWorkspaceLoading = false; return }
     const timer = setTimeout(() => { showWorkspaceLoading = true }, refreshIndicatorDelay)
-    return () => clearTimeout(timer)
-  })
-  $effect(() => {
-    // Restart the delay when switching to a different note.
-    const key = activeTabKey
-    if (!outlineLoadingPending || !key) { showOutlineLoading = false; return }
-    showOutlineLoading = false
-    const timer = setTimeout(() => { showOutlineLoading = true }, refreshIndicatorDelay)
     return () => clearTimeout(timer)
   })
   let startRow = $derived(Math.max(0, Math.min(visibleTree.length, Math.floor(scrollTop / rowHeight) - overscan)))
@@ -416,45 +391,6 @@
     }
   }
 
-  $effect(() => {
-    const signature = `${selectedNote ?? ''}\n${activeOutline.map((heading) => `${heading.id}:${heading.level}`).join('\n')}`
-    if (signature === lastOutlineSignature) return
-    lastOutlineSignature = signature
-    expandedOutlineIds = collectExpandableIds(outlineTree)
-  })
-
-  function buildOutlineTree(headings: FlatOutlineHeading[]): OutlineHeading[] {
-    const roots: OutlineHeading[] = []
-    const parents: OutlineHeading[] = []
-    for (const heading of headings) {
-      const node: OutlineHeading = { ...heading, children: [] }
-      while (parents.length && parents[parents.length - 1].level >= node.level) parents.pop()
-      const parent = parents[parents.length - 1]
-      if (parent) parent.children.push(node)
-      else roots.push(node)
-      parents.push(node)
-    }
-    return roots
-  }
-
-  function filterOutline(nodes: OutlineHeading[], query: string): OutlineHeading[] {
-    if (!query) return nodes
-    return nodes.flatMap((node) => {
-      const children = filterOutline(node.children, query)
-      return node.label.toLowerCase().includes(query) || children.length ? [{ ...node, children }] : []
-    })
-  }
-
-  function collectExpandableIds(nodes: OutlineHeading[]): string[] {
-    const ids: string[] = []
-    for (const node of nodes) {
-      if (node.children.length) {
-        ids.push(node.id, ...collectExpandableIds(node.children))
-      }
-    }
-    return ids
-  }
-
   function updateTabOutline(key: string, headings: FlatOutlineHeading[]) {
     tabOutlines = { ...tabOutlines, [key]: headings }
   }
@@ -463,18 +399,7 @@
     outlineOpen = !outlineOpen
   }
 
-  function toggleOutlineNode(id: string) {
-    expandedOutlineIds = expandedOutlineIds.includes(id)
-      ? expandedOutlineIds.filter((item) => item !== id)
-      : [...expandedOutlineIds, id]
-  }
-
-  function toggleAllOutline() {
-    expandedOutlineIds = allOutlineExpanded ? [] : [...expandableOutlineIds]
-  }
-
-  function jumpToHeading(event: MouseEvent, id: string) {
-    event.preventDefault()
+  function jumpToHeading(id: string) {
     if (!activeTabKey || activeTabKey === settingsTabKey) return
     editors[activeTabKey]?.jumpToHeading(id)
   }
@@ -1317,29 +1242,14 @@
       {#if workspaceMessage}<p role={workspaceMessage.startsWith('Could not') ? 'alert' : 'status'} class="workspace-message">{workspaceMessage}</p>{/if}
     </section>
 
-    {#if showRightPanel}
-      <aside class="note-outline" aria-label="Contents">
-        <PanelResizeHandle side="right" width={panelWidths.contents} onresize={(width) => resizePanel('right', width)} />
-        <div class="outline-heading">
-          <h2 class="outline-title">Contents</h2>
-          <button class="outline-collapse-all" aria-label={filterIsActive || allOutlineExpanded ? 'Collapse all headings' : 'Expand all headings'} title={filterIsActive ? 'Clear the filter to change heading expansion' : allOutlineExpanded ? 'Collapse all headings' : 'Expand all headings'} aria-expanded={filterIsActive || allOutlineExpanded} disabled={expandableOutlineIds.length === 0 || filterIsActive} onclick={toggleAllOutline}><Icon name={filterIsActive || allOutlineExpanded ? 'collapse' : 'expand'} size={16} /></button>
-        </div>
-        <input class="outline-filter" type="search" aria-label="Filter headings" placeholder="Filter headings..." bind:value={outlineFilter} />
-        {#if outlineLoadingPending}
-          {#if showOutlineLoading}<p class="outline-empty" role="status">Loading headings...</p>{/if}
-        {:else if activeOutline.length === 0}
-          <p class="outline-empty">No headings in this note.</p>
-        {:else if filteredOutline.length === 0}
-          <p class="outline-empty">No headings match this filter.</p>
-        {:else}
-          <nav class="outline-nav" aria-label="Note headings">
-            <ul>
-              {@render renderHeadings(filteredOutline, 0, filterIsActive)}
-            </ul>
-          </nav>
-        {/if}
-      </aside>
-    {/if}
+    <OutlinePanel
+      open={showRightPanel}
+      noteKey={activeNoteKey}
+      headings={activeOutline}
+      width={panelWidths.contents}
+      onResize={(width) => resizePanel('right', width)}
+      onJump={jumpToHeading}
+    />
   </div>
   <footer class="status-bar">
     <span>{selectedWorkspace ?? 'No workspace selected'}</span>
@@ -1367,24 +1277,3 @@
     </div>
   {/if}
 </main>
-
-{#snippet renderHeadings(nodes: OutlineHeading[], depth: number, filterIsActive: boolean)}
-  {#each nodes as heading (heading.id)}
-    {@const hasChildren = heading.children.length > 0}
-    {@const expanded = filterIsActive || expandedOutlineIds.includes(heading.id)}
-    <li class="outline-row" style={`padding-left: ${2 + depth * 20}px`}>
-      {#each Array(depth) as _, level}
-        <span class="outline-indent-guide" aria-hidden="true" style={`left: ${10 + level * 20}px`}></span>
-      {/each}
-      {#if hasChildren}
-        <button class="outline-caret" aria-label={expanded ? `Collapse ${heading.label}` : `Expand ${heading.label}`} aria-expanded={expanded} disabled={filterIsActive} onclick={() => toggleOutlineNode(heading.id)}><Icon name={expanded ? 'chevron-down' : 'chevron-right'} /></button>
-      {:else}
-        <span class="outline-caret-spacer" aria-hidden="true"></span>
-      {/if}
-      <a class="outline-link outline-level-{heading.level}" href={`#${heading.id}`} onclick={(event) => jumpToHeading(event, heading.id)} title={heading.label}>{heading.label}</a>
-    </li>
-    {#if hasChildren && expanded}
-      {@render renderHeadings(heading.children, depth + 1, filterIsActive)}
-    {/if}
-  {/each}
-{/snippet}

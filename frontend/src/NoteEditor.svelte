@@ -11,10 +11,8 @@
   import Icon from './Icon.svelte'
   import PopupMenu from './PopupMenu.svelte'
   import { openWorkspaceFile } from './fileActions'
+  import type { EditorPreferences, EditorStatus, FlatOutlineHeading } from './sharedTypes'
 
-  type EditorPreferences = { autosave: boolean; auto_reload: boolean; reload_notice: boolean }
-  type EditorStatus = { dirty: boolean; saving: boolean; conflict: boolean }
-  type FlatOutlineHeading = { id: string; label: string; level: number }
   let {
     workspaceId,
     workspaceName = '',

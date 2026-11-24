@@ -1,27 +1,17 @@
 <script lang="ts">
   import Icon from './Icon.svelte'
   import PopupMenu from './PopupMenu.svelte'
+  import type {
+    AppearanceFonts,
+    AppearanceFontSizes,
+    AppearancePatch,
+    AppearanceView,
+    EditorPreferences,
+    PageWidthPreset,
+    SurfaceMode,
+    ThemeId,
+  } from './sharedTypes'
 
-  type ThemeId = 'warm-charcoal' | 'warm-paper'
-  type SurfaceMode = 'framed' | 'seamless'
-  type PageWidthPreset = '74ch' | '96ch' | '100%'
-  type AppearanceFonts = { ui: string[]; body: string[]; monospace: string[] }
-  type AppearanceFontSizes = { ui: number; body: number; monospace: number }
-  type EditorPreferences = { autosave: boolean; auto_reload: boolean; reload_notice: boolean }
-  type AppearancePatch = {
-    theme?: ThemeId
-    surface_mode?: SurfaceMode
-    page_width?: PageWidthPreset
-    fonts?: AppearanceFonts
-    font_sizes?: AppearanceFontSizes
-  }
-  type AppearanceView = {
-    theme: ThemeId
-    surface_mode: SurfaceMode
-    page_width: string
-    fonts: AppearanceFonts
-    font_sizes: AppearanceFontSizes
-  }
   type Scope = 'workspace' | 'application'
 
   let {
