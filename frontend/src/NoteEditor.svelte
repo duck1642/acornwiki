@@ -11,15 +11,7 @@
   import { createMarkdownEditorExtensions, highlightCodeElement, lineNumbersExtension } from './markdownEditor'
   import type { EditorPreferences, EditorStatus, FlatOutlineHeading } from './sharedTypes'
 
-  // Disable Setext headings so typing "-" under a line or list item never turns it into H2,
-  // and Source/Read stay consistent (ATX "#" headings only).
-  const markdownParser = new Marked({
-    tokenizer: {
-      lheading() {
-        return undefined
-      },
-    },
-  })
+  const markdownParser = new Marked()
 
   function extractCodeLanguage(codeEl: Element | null): string {
     const className = codeEl?.getAttribute('class') ?? ''
@@ -163,7 +155,7 @@
     const links = markdownParser.lexer(text).links
     tree.iterate({ enter(node) {
       if (node.name === 'Blockquote' || node.name === 'ListItem') return false
-      if (!/^ATXHeading[1-6]$/.test(node.name)) return
+      if (!/^(ATX|Setext)Heading[1-6]$/.test(node.name)) return
       const lexer = new Lexer(markdownParser.defaults)
       lexer.tokens.links = links
       const html = markdownParser.parser(lexer.lex(view.state.sliceDoc(node.from, node.to)))

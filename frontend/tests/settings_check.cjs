@@ -47,11 +47,17 @@ const net = require('node:net');
             'Title',
             '---',
             '',
+            'Top title',
+            '===',
+            '',
             '> ## Same',
             '',
             '- ## Same',
             '',
             '## Same',
+            '',
+            'Same',
+            '---',
             '',
             '```c++',
             'int x = 1;',
@@ -203,8 +209,8 @@ const net = require('node:net');
     assert.equal(await page.locator('.note-panel:not(.inactive) .cm-content').evaluate((el) => el.contains(document.activeElement)), true);
     await page.getByRole('button', { name: 'other.md', exact: true }).click();
     await page.locator('.note-outline a', { hasText: 'Second' }).waitFor();
-    // Bullet items and trailing "-" lines must NOT show up as Setext headings in Contents.
-    assert.equal(await page.locator('.note-outline a').count(), 1);
+    // A paragraph followed by a single dash is a valid Setext heading; list items stay out of Contents.
+    assert.deepEqual(await page.locator('.note-outline a').allInnerTexts(), ['Second', 'Paragraph']);
 
     // 5. Editor features: line numbers toggle, fold gutter, Ctrl+B shortcut, click-below focus, Read code highlighting + Copy.
     await page.getByRole('button', { name: 'note.md', exact: true }).click();
@@ -241,14 +247,23 @@ const net = require('node:net');
     // 7. Markdown regressions: no Setext block swallowing, nested heading jumpToHeading, code language labels/highlighting.
     await page.getByRole('button', { name: 'regressions.md', exact: true }).click();
     await page.locator('.note-panel[data-note-path="regressions.md"]:not(.inactive) .cm-content').waitFor();
-    assert.deepEqual(await page.locator('.note-outline a').allInnerTexts(), ['Same']);
+    assert.deepEqual(await page.locator('.note-outline a').allInnerTexts(), ['Title', 'Top title', 'Same', 'Same']);
+    await page.locator('.note-outline a', { hasText: 'Top title' }).click();
+    assert.equal((await page.locator('.note-panel[data-note-path="regressions.md"] .cm-activeLine').innerText()).trim(), 'Top title');
+    await page.locator('.note-outline a', { hasText: 'Title' }).first().click();
+    assert.equal((await page.locator('.note-panel[data-note-path="regressions.md"] .cm-activeLine').innerText()).trim(), 'Title');
     // Jump from Contents in Source mode should focus editor on the top-level "## Same" despite quoted/list "## Same".
-    await page.locator('.note-outline a', { hasText: 'Same' }).click();
+    await page.getByRole('link', { name: 'Same', exact: true }).first().click();
     const activeLineText = await page.locator('.note-panel[data-note-path="regressions.md"] .cm-activeLine').innerText();
     assert.equal(activeLineText.trim(), '## Same');
+    await page.getByRole('link', { name: 'Same', exact: true }).last().click();
+    assert.equal((await page.locator('.note-panel[data-note-path="regressions.md"] .cm-activeLine').innerText()).trim(), 'Same');
     await page.locator('.note-panel[data-note-path="regressions.md"]').getByRole('button', { name: 'Read', exact: true }).click();
     const readPanel = page.locator('.note-panel[data-note-path="regressions.md"] .note-read');
-    assert.equal(await readPanel.locator('hr').count(), 2);
+    assert.equal(await readPanel.locator('hr').count(), 1);
+    assert.equal(await readPanel.getByRole('heading', { name: 'Title', exact: true, level: 2 }).count(), 1);
+    assert.equal(await readPanel.getByRole('heading', { name: 'Top title', exact: true, level: 1 }).count(), 1);
+    assert.equal(await readPanel.getByRole('heading', { name: 'Same', exact: true, level: 2 }).last().getAttribute('id'), 'same-3');
     assert.equal(await readPanel.locator('ul li').first().innerText(), 'item');
     assert.deepEqual(
       await readPanel.locator('.read-code-lang').allTextContents(),

@@ -331,7 +331,7 @@ export function createMarkdownEditorExtensions(extra: Extension[]): Extension[] 
     highlightSelectionMatches(),
     foldGutter({ markerDOM: createFoldMarker }),
     search({ top: true }),
-    markdown({ base: markdownLanguage, codeLanguages: resolveCodeLanguage, extensions: [{ remove: ['SetextHeading'] }] }),
+    markdown({ base: markdownLanguage, codeLanguages: resolveCodeLanguage }),
     syntaxHighlighting(markdownHighlightStyle),
     acornEditorTheme,
     EditorView.lineWrapping,
