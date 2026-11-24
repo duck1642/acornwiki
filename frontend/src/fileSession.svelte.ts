@@ -55,6 +55,7 @@ export class FileSession {
 
   start() {
     const initial = this.options.initialSnapshot
+    this.options.initialSnapshot = undefined
     if (initial) {
       this.path = initial.path
       this.version = initial.version
@@ -78,6 +79,10 @@ export class FileSession {
     this.operation += 1
     clearTimeout(this.saveTimer)
     clearTimeout(this.externalTimer)
+    const resolve = this.chooseClose
+    this.chooseClose = undefined
+    this.prompt = false
+    resolve?.('cancel')
   }
 
   onEditorTextChange(nextText: string) {
@@ -151,9 +156,14 @@ export class FileSession {
       const outcome = await this.options.read(this.path ?? this.options.initialPath)
       if (token !== this.operation) return
       if (!outcome.ok) {
-        this.error = outcome.reason === 'too_large'
-          ? 'This file exceeds the 2 MB text editor size limit.'
-          : 'This file cannot be decoded as UTF-8 text.'
+        if (outcome.reason === 'too_large') {
+          const maxMb = (outcome.maxBytes / (1024 * 1024)).toFixed(0)
+          this.error = `This file exceeds the ${maxMb} MB text editor size limit.`
+        } else if (outcome.reason === 'binary') {
+          this.error = 'This file appears to contain binary data and cannot be opened in the text editor.'
+        } else {
+          this.error = 'This file is not valid UTF-8 text (it may be binary or use an unsupported encoding).'
+        }
         return
       }
       const file = outcome.file
@@ -172,7 +182,6 @@ export class FileSession {
       if (token === this.operation) {
         this.error = `Could not open or watch the ${label}.`
         console.error(reason)
-        this.scheduleSave()
       }
     } finally {
       this.opening = false
@@ -206,6 +215,8 @@ export class FileSession {
       } catch (reason) {
         if (this.disposed || token !== this.operation) return false
         console.error(reason)
+        // Clear saving before checking external changes so clean files can still auto-reload.
+        this.saving = false
         await this.checkExternal()
         if (!this.conflict) this.error = `Could not save the ${label}.`
         return false
@@ -310,7 +321,11 @@ export class FileSession {
   }
 
   loadDisk() {
+    if (this.saving || this.prompt || this.options.getFreezeEditors()) return
     if (this.dirty && !window.confirm('Discard unsaved changes and load the version on disk?')) return
+    if (this.saving || this.prompt || this.options.getFreezeEditors()) return
+    this.operation += 1
+    clearTimeout(this.saveTimer)
     this.version = this.diskVersion
     this.savedText = this.diskText
     this.hasBom = this.diskHasBom

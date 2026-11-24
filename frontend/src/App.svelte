@@ -30,7 +30,7 @@
     | { kind: 'item'; path: string; item: FileTreeItem; depth: number }
     | { kind: 'status'; path: string; message: string; depth: number; error: boolean }
   type NoteSnapshot = LoadedFileSnapshot
-  type DocumentTab = { key: string; path: string; kind: DocumentKind; initialSnapshot?: LoadedFileSnapshot }
+  type DocumentTab = { key: string; path: string; kind: DocumentKind }
   type DocumentEditorHandle = {
     save: (expected?: string) => Promise<boolean>
     prepareClose: () => Promise<boolean>
@@ -183,6 +183,12 @@
   let settingsTabOpen = $state(false)
   let tabStatuses = $state<Record<string, EditorStatus>>({})
   let editors: Record<string, DocumentEditorHandle | undefined> = {}
+  const pendingInitialSnapshots = new Map<string, LoadedFileSnapshot>()
+  function takeInitialSnapshot(key: string): LoadedFileSnapshot | undefined {
+    const snapshot = pendingInitialSnapshots.get(key)
+    pendingInitialSnapshots.delete(key)
+    return snapshot
+  }
   let bulkClose = $state<{ paths: string[]; error: string; busy: boolean; cancelable: boolean } | null>(null)
   let bulkCloseChoice: ((choice: 'save' | 'discard' | 'cancel') => void) | undefined
   let bulkCancelRequested = false
@@ -356,11 +362,15 @@
     }
     function onFocus() { void refreshTree(null); scheduleNoteChecks() }
     function onKeydown(event: KeyboardEvent) {
-      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 's') return
+      if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey || event.key.toLowerCase() !== 's') return
       const instance = activeTabKey && activeTabKey !== settingsTabKey ? editors[activeTabKey] : undefined
       if (!instance) return
       event.preventDefault()
       if (tabsLocked) return
+      if (!instance.closeStatus().dirty) {
+        void instance.checkExternalNow()
+        return
+      }
       void instance.save()
     }
     function beforeUnload(event: BeforeUnloadEvent) {
@@ -478,8 +488,19 @@
   }
 
   function removeUnavailableHistoryItem(index: number) {
-    navHistory = navHistory.filter((_, itemIndex) => itemIndex !== index)
-    if (index < navIndex) navIndex -= 1
+    const next = navHistory.filter((_, itemIndex) => itemIndex !== index)
+    let nextIndex = index < navIndex ? navIndex - 1 : navIndex
+    // Collapse adjacent duplicates exposed when removing the item between them.
+    const collapsed: string[] = []
+    for (let i = 0; i < next.length; i += 1) {
+      if (collapsed.length > 0 && collapsed[collapsed.length - 1] === next[i]) {
+        if (i <= nextIndex) nextIndex -= 1
+        continue
+      }
+      collapsed.push(next[i])
+    }
+    navHistory = collapsed
+    navIndex = collapsed.length ? Math.max(0, Math.min(nextIndex, collapsed.length - 1)) : -1
   }
 
   async function openFile(path: string, fragment?: string, options?: { newTab?: boolean; historyDelta?: number }) {
@@ -514,36 +535,36 @@
         return
       }
       const kind: DocumentKind = markdown ? 'markdown' : 'text'
-      let initialSnapshot: LoadedFileSnapshot | undefined
-      if (kind === 'text') {
-        const api = window.pywebview?.api
-        if (!api?.read_text_file) {
-          if (historyIndex === undefined) await openTreeFile(path)
-          return
-        }
-        try {
-          const result = await api.read_text_file(requestedWorkspaceId, path)
-          if (requestedWorkspaceId !== workspaceId) return
-          if (!result.ok) {
-            unopenableFile = { path, message: formatUnopenableFileMessage(path, result) }
-            if (historyIndex !== undefined) removeUnavailableHistoryItem(historyIndex)
-            return
-          }
-          initialSnapshot = {
-            path: result.path,
-            content: result.content,
-            version: result.version,
-            has_bom: result.has_bom,
-          }
-        } catch (error) {
-          if (requestedWorkspaceId === workspaceId) workspaceMessage = 'Could not open the file.'
-          if (requestedWorkspaceId === workspaceId && historyIndex !== undefined) removeUnavailableHistoryItem(historyIndex)
-          console.error(error)
-          return
-        }
-      }
       tabsLocked = true
       try {
+        let initialSnapshot: LoadedFileSnapshot | undefined
+        if (kind === 'text') {
+          const api = window.pywebview?.api
+          if (!api?.read_text_file) {
+            if (historyIndex === undefined) await openTreeFile(path)
+            return
+          }
+          try {
+            const result = await api.read_text_file(requestedWorkspaceId, path)
+            if (requestedWorkspaceId !== workspaceId) return
+            if (!result.ok) {
+              unopenableFile = { path, message: formatUnopenableFileMessage(path, result) }
+              if (historyIndex !== undefined) removeUnavailableHistoryItem(historyIndex)
+              return
+            }
+            initialSnapshot = {
+              path: result.path,
+              content: result.content,
+              version: result.version,
+              has_bom: result.has_bom,
+            }
+          } catch (error) {
+            if (requestedWorkspaceId === workspaceId) workspaceMessage = 'Could not open the file.'
+            if (requestedWorkspaceId === workspaceId && historyIndex !== undefined) removeUnavailableHistoryItem(historyIndex)
+            console.error(error)
+            return
+          }
+        }
         // Freeze the current editor before checking whether replacing its tab is safe.
         await tick()
         const currentIndex = !newTab && activeTabKey && activeTabKey !== settingsTabKey
@@ -559,12 +580,13 @@
           !currentStatus?.saving &&
           !currentStatus?.conflict,
         )
-        const newEntry: DocumentTab = { key, path, kind, initialSnapshot }
+        const newEntry: DocumentTab = { key, path, kind }
         const next = canReplace && currentTab
           ? noteTabs.map((tab, index) => (index === currentIndex ? newEntry : tab))
           : [...noteTabs, newEntry]
         if (!(await updateOpenNotes(next))) return
         if (canReplace && currentTab) {
+          pendingInitialSnapshots.delete(currentTab.key)
           const nextStatuses = { ...tabStatuses }
           delete nextStatuses[currentTab.key]
           tabStatuses = nextStatuses
@@ -572,6 +594,7 @@
           delete nextOutlines[currentTab.key]
           tabOutlines = nextOutlines
         }
+        if (initialSnapshot) pendingInitialSnapshots.set(key, initialSnapshot)
         noteTabs = next
         activeTabKey = key
         if (historyIndex === undefined) recordNavigation(path)
@@ -664,9 +687,10 @@
       } else bulkClose = null
       if (bulkClose) bulkClose = { ...bulkClose, busy: true, cancelable: false }
       if (!(await updateOpenNotes([], id))) {
-        bulkClose = { paths: noteTabs.map((tab) => tab.path), error: 'The open note list could not be cleared. Notes are still open.', busy: false, cancelable: true }
+        workspaceMessage = 'The open file list could not be cleared. Open tabs are still open.'
         return false
       }
+      pendingInitialSnapshots.clear()
       noteTabs = []
       tabStatuses = {}
       tabOutlines = {}
@@ -716,18 +740,22 @@
   }
 
   function openSettingsTab() {
-    if (tabsLocked) return
-    settingsTabOpen = true
-    activeTabKey = settingsTabKey
     settingsOpen = false
+    void serializeTabAction(async () => {
+      if (tabsLocked) return
+      settingsTabOpen = true
+      activeTabKey = settingsTabKey
+    })
   }
 
   function closeSettingsTab() {
-    if (tabsLocked) return
-    settingsTabOpen = false
-    if (activeTabKey === settingsTabKey) activeTabKey = noteTabs[0]?.key ?? null
-    const activeTab = noteTabs.find((item) => item.key === activeTabKey)
-    if (activeTab) recordNavigation(activeTab.path)
+    void serializeTabAction(async () => {
+      if (tabsLocked) return
+      settingsTabOpen = false
+      if (activeTabKey === settingsTabKey) activeTabKey = noteTabs[0]?.key ?? null
+      const activeTab = noteTabs.find((item) => item.key === activeTabKey)
+      if (activeTab) recordNavigation(activeTab.path)
+    })
   }
 
   async function setEditorPreference(key: keyof EditorPreferences, input: HTMLInputElement) {
@@ -1308,7 +1336,7 @@
                 bind:this={editors[tab.key]}
                 tabKey={tab.key}
                 filePath={tab.path}
-                initialSnapshot={tab.initialSnapshot}
+                takeInitialSnapshot={() => takeInitialSnapshot(tab.key)}
                 active={activeTabKey === tab.key}
                 freezeEditors={tabsLocked}
                 workspaceId={workspaceId ?? ''}

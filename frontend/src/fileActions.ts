@@ -28,7 +28,7 @@ export function formatUnopenableFileMessage(
 ): string {
   const name = path.replace(/\\/g, '/').split('/').pop() ?? path
   if (result.reason === 'too_large') {
-    const sizeMb = (result.size_bytes / (1024 * 1024)).toFixed(1)
+    const sizeMb = (Math.ceil((result.size_bytes / (1024 * 1024)) * 10) / 10).toFixed(1)
     const maxMb = (result.max_bytes / (1024 * 1024)).toFixed(0)
     return `"${name}" (${sizeMb} MB) exceeds the ${maxMb} MB text editor limit.`
   }

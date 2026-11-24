@@ -8,6 +8,7 @@
   import {
     buildBreadcrumb,
     createBaseEditorExtensions,
+    isClickOnScrollbar,
     lineNumbersExtension,
     resolveLanguageByFilename,
     wordWrapExtension,
@@ -21,7 +22,7 @@
     workspaceName = '',
     tabKey,
     filePath,
-    initialSnapshot,
+    takeInitialSnapshot,
     active,
     freezeEditors = false,
     editorPreferences,
@@ -37,7 +38,7 @@
     workspaceName?: string
     tabKey: string
     filePath: string
-    initialSnapshot?: LoadedFileSnapshot
+    takeInitialSnapshot?: () => LoadedFileSnapshot | undefined
     active: boolean
     freezeEditors?: boolean
     editorPreferences: EditorPreferences
@@ -65,7 +66,7 @@
   const session = new FileSession({
     entityLabel: 'file',
     initialPath: untrack(() => filePath),
-    initialSnapshot: untrack(() => initialSnapshot),
+    initialSnapshot: untrack(() => takeInitialSnapshot?.()),
     read: async (targetPath) => {
       const api = window.pywebview?.api
       if (!api?.read_text_file) throw new Error('Backend unavailable')
@@ -157,9 +158,11 @@
   }
 
   function handleHostMousedown(event: MouseEvent) {
-    if (event.button !== 0 || !session.path || !view) return
+    if (event.button !== 0 || !session.path || !view || freezeEditors || session.prompt) return
     const target = event.target as HTMLElement | null
     if (!target) return
+    const scroller = target.closest<HTMLElement>('.cm-scroller')
+    if (scroller && isClickOnScrollbar(event, scroller)) return
     if (target.closest('.cm-content') || target.closest('.cm-gutters') || target.closest('.cm-panels') || target.closest('button, a, input, summary')) return
     event.preventDefault()
     const end = view.state.doc.length
@@ -229,10 +232,10 @@
         <div role="alert" class="note-conflict">
           <span>{session.message || (session.missing ? 'The file is missing or cannot be read.' : 'The file changed outside acornwiki.')}</span>
           {#if !session.missing}
-            <button onclick={() => session.loadDisk()}>Load disk version</button>
-            {#if session.dirty}<button onclick={() => { if (window.confirm('Replace the disk version with the editor content?')) void session.save(session.diskVersion) }}>Overwrite with editor version</button>{/if}
+            <button disabled={session.saving || freezeEditors || session.prompt} onclick={() => session.loadDisk()}>Load disk version</button>
+            {#if session.dirty}<button disabled={session.saving || freezeEditors || session.prompt} onclick={() => { if (window.confirm('Replace the disk version with the editor content?')) void session.save(session.diskVersion) }}>Overwrite with editor version</button>{/if}
           {/if}
-          <button onclick={() => void session.checkExternal()}>Check again</button>
+          <button disabled={session.saving || freezeEditors || session.prompt} onclick={() => void session.checkExternal()}>Check again</button>
         </div>
       {/if}
       {#if session.prompt}

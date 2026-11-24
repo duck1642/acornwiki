@@ -241,7 +241,7 @@ class Bridge:
             if self._tree is not None:
                 self._tree.close()
                 self._tree = None
-            self._open_notes.clear()
+            self._open_notes = set()
             self._open_notes_registered = False
             self._active_note = None
             self._tree = FileTree(Path(workspace_root), self._tree_changed, self._note_changed)
@@ -378,12 +378,29 @@ class Bridge:
                 moved_active = path_after_move(active, source, destination)
                 if moved_active != active:
                     moved_active_note = tree.root / moved_active
+            moved_open_files: list[Path] = []
+            rebased_open_files: set[str] = set()
+            for watched in self._open_notes:
+                try:
+                    watched_rel = Path(watched).relative_to(tree.root).as_posix()
+                except ValueError:
+                    rebased_open_files.add(watched)
+                    continue
+                moved_rel = path_after_move(watched_rel, source, destination)
+                if moved_rel != watched_rel:
+                    moved_path = tree.root / moved_rel
+                    rebased_open_files.add(os.path.normcase(os.path.abspath(moved_path)))
+                    moved_open_files.append(moved_path)
+                else:
+                    rebased_open_files.add(watched)
 
             # The bridge lock serializes app operations. External writers can still
             # change files between checks, the rename, and individual note saves.
             tree.move_entry(source, destination)
             if moved_active_note is not None:
                 self._active_note = os.path.normcase(os.path.abspath(moved_active_note))
+            if self._open_notes_registered:
+                self._open_notes = rebased_open_files
 
             result: MoveResult = {
                 "destination": destination,
@@ -409,6 +426,8 @@ class Bridge:
                     result["updated"].append(path)
             if moved_active_note is not None:
                 self._note_changed(moved_active_note)
+            for moved_path in moved_open_files:
+                self._note_changed(moved_path)
             return result
 
     def resolve_note_link(
@@ -579,7 +598,7 @@ class Bridge:
         with self._lock:
             tree = self._require_tree(workspace_id)
             self._tree = None
-            self._open_notes.clear()
+            self._open_notes = set()
             self._open_notes_registered = False
             self._active_note = None
             tree.close()
@@ -588,7 +607,7 @@ class Bridge:
         with self._lock:
             tree = self._tree
             self._tree = None
-            self._open_notes.clear()
+            self._open_notes = set()
             self._open_notes_registered = False
             self._active_note = None
             if tree is not None:

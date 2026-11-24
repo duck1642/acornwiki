@@ -1,5 +1,7 @@
 """Exercise note boundaries, version conflicts, and safe replacement."""
 
+import os
+import stat
 import tempfile
 import time
 import unittest
@@ -21,6 +23,7 @@ from backend.modules.notes import (
     resolve_note_link,
     save_note,
     save_text_file,
+    workspace_file_path,
 )
 from backend.services.media import MediaServer
 
@@ -401,3 +404,110 @@ class NoteTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             bridge.set_open_files(workspace, ["../outside.py"])
         self.assertEqual(len(bridge._open_notes), 3)
+
+    def test_workspace_file_path_rejects_root_reserved_and_ads_and_handles_unresolved_root(
+        self,
+    ) -> None:
+        (self.root / "data.txt").write_text("ok", encoding="utf-8")
+        for invalid in (".", "./", "NUL", "CON", "CON.txt", "sub/NUL.md", "data.txt:probe"):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                workspace_file_path(self.root, invalid)
+        with self.assertRaises(ValueError):
+            save_text_file(self.root, ".", "x", "v")
+        # Unresolved relative root still resolves workspace files cleanly.
+        previous_cwd = os.getcwd()
+        try:
+            os.chdir(self.root.parent)
+            relative_root = Path(self.root.name)
+            loaded = read_text_file(relative_root, "data.txt")
+            self.assertTrue(loaded["ok"])
+            self.assertEqual(loaded["content"], "ok")
+            self.assertEqual(read_note(relative_root, "note.md")["content"], "first\r\n")
+        finally:
+            os.chdir(previous_cwd)
+
+    def test_read_text_file_directory_utf16_and_max_bytes_validation(self) -> None:
+        folder = self.root / "subdir"
+        folder.mkdir()
+        with self.assertRaises(IsADirectoryError):
+            read_text_file(self.root, "subdir")
+
+        utf16_le = self.root / "utf16le.txt"
+        utf16_le.write_bytes(b"\xff\xfe" + "hello".encode("utf-16-le"))
+        res_le = read_text_file(self.root, "utf16le.txt")
+        self.assertFalse(res_le["ok"])
+        self.assertEqual(res_le["reason"], "unsupported_encoding")
+
+        utf16_be = self.root / "utf16be.txt"
+        utf16_be.write_bytes(b"\xfe\xff" + "hello".encode("utf-16-be"))
+        res_be = read_text_file(self.root, "utf16be.txt")
+        self.assertFalse(res_be["ok"])
+        self.assertEqual(res_be["reason"], "unsupported_encoding")
+
+        with self.assertRaises(TypeError):
+            read_text_file(self.root, "note.md", max_bytes=True)
+        with self.assertRaises(ValueError):
+            read_text_file(self.root, "note.md", max_bytes=0)
+
+    def test_readonly_file_save_cleans_temporary_file(self) -> None:
+        readonly = self.root / "readonly.txt"
+        readonly.write_bytes(b"original")
+        version = read_text_file(self.root, "readonly.txt")["version"]
+        readonly.chmod(stat.S_IREAD)
+        self.addCleanup(lambda: readonly.exists() and readonly.chmod(stat.S_IWRITE | stat.S_IREAD))
+        if os.name == "nt":
+            with self.assertRaises(PermissionError):
+                save_text_file(self.root, "readonly.txt", "changed", version)
+            self.assertEqual(readonly.read_bytes(), b"original")
+            leftovers = [p.name for p in self.root.iterdir() if p.name.startswith(".acornwiki-")]
+            self.assertEqual(leftovers, [])
+
+    def test_save_conflict_streams_large_disk_file_without_overwriting(self) -> None:
+        target = self.root / "grown.txt"
+        target.write_bytes(b"small")
+        version = read_text_file(self.root, "grown.txt")["version"]
+        target.write_bytes(b"x" * (3 * 1024 * 1024))
+        with self.assertRaises(NoteConflictError):
+            save_text_file(self.root, "grown.txt", "local", version)
+        self.assertEqual(target.stat().st_size, 3 * 1024 * 1024)
+
+    def test_bridge_text_file_api_and_commit_move_rebases_open_files(self) -> None:
+        class TestWindow:
+            def __init__(self) -> None:
+                self.values: dict[str, int] = {}
+                self.state: SharedState = self.values
+
+            def destroy(self) -> None:
+                pass
+
+        old_file = self.root / "old.txt"
+        old_file.write_bytes(UTF8_BOM + b"hello\r\n")
+        bridge = Bridge()
+        self.addCleanup(bridge._close)
+        window = TestWindow()
+        bridge._attach_window(window)
+        workspace = bridge.open_workspace(str(self.root))["workspace_id"]
+
+        loaded = bridge.read_text_file(workspace, "old.txt")
+        self.assertTrue(loaded["ok"])
+        self.assertTrue(loaded["has_bom"])
+        saved = bridge.save_text_file(
+            workspace, "old.txt", "updated\r\n", loaded["version"], True
+        )
+        self.assertEqual(old_file.read_bytes(), UTF8_BOM + b"updated\r\n")
+        self.assertTrue(saved["has_bom"])
+
+        if os.name == "nt":
+            bridge.set_open_files(workspace, ["old.txt"])
+            bridge.commit_move(workspace, "old.txt", "new.txt", None, [])
+            expected_watched = os.path.normcase(os.path.abspath(self.root / "new.txt"))
+            self.assertEqual(bridge._open_notes, {expected_watched})
+            deadline = time.monotonic() + 3
+            while "note_revision" not in window.values and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertIn("note_revision", window.values)
+
+        second = bridge.open_workspace(str(self.root))["workspace_id"]
+        self.assertNotEqual(workspace, second)
+        with self.assertRaises(ValueError):
+            bridge.read_text_file(workspace, "new.txt" if os.name == "nt" else "old.txt")

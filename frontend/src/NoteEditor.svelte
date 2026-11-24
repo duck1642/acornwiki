@@ -6,7 +6,7 @@
   import DOMPurify from 'dompurify'
   import Icon from './Icon.svelte'
   import PopupMenu from './PopupMenu.svelte'
-  import { buildBreadcrumb } from './editorCore'
+  import { buildBreadcrumb, isClickOnScrollbar } from './editorCore'
   import { FileSession } from './fileSession.svelte'
   import {
     createMarkdownEditorExtensions,
@@ -303,9 +303,11 @@
   }
 
   function handleSheetMousedown(event: MouseEvent) {
-    if (event.button !== 0 || mode !== 'source' || !session.path || !view) return
+    if (event.button !== 0 || mode !== 'source' || !session.path || !view || freezeEditors || session.prompt) return
     const target = event.target as HTMLElement | null
     if (!target) return
+    const scroller = event.currentTarget as HTMLElement | null
+    if (scroller && isClickOnScrollbar(event, scroller)) return
     if (target.closest('.cm-editor') || target.closest('button, a, input, summary')) return
     event.preventDefault()
     const end = view.state.doc.length
@@ -397,10 +399,10 @@
         <div role="alert" class="note-conflict">
           <span>{session.message || (session.missing ? 'The note is missing or cannot be read.' : 'The note changed outside acornwiki.')}</span>
           {#if !session.missing}
-            <button onclick={() => session.loadDisk()}>Load disk version</button>
-            {#if session.dirty}<button onclick={() => { if (window.confirm('Replace the disk version with the editor content?')) void session.save(session.diskVersion) }}>Overwrite with editor version</button>{/if}
+            <button disabled={session.saving || freezeEditors || session.prompt} onclick={() => session.loadDisk()}>Load disk version</button>
+            {#if session.dirty}<button disabled={session.saving || freezeEditors || session.prompt} onclick={() => { if (window.confirm('Replace the disk version with the editor content?')) void session.save(session.diskVersion) }}>Overwrite with editor version</button>{/if}
           {/if}
-          <button onclick={() => void session.checkExternal()}>Check again</button>
+          <button disabled={session.saving || freezeEditors || session.prompt} onclick={() => void session.checkExternal()}>Check again</button>
         </div>
       {/if}
       {#if session.prompt}

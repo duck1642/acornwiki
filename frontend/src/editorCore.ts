@@ -107,7 +107,7 @@ export const acornEditorTheme = EditorView.theme({
     borderRadius: '3px',
   },
   '.cm-gutters': {
-    backgroundColor: 'transparent',
+    backgroundColor: 'var(--bg-paper)',
     color: 'var(--ink-faint)',
     borderRight: '0',
     marginRight: '6px',
@@ -255,13 +255,23 @@ export function resolveCodeLanguage(info: string): LanguageDescription | null {
 export function resolveLanguageByFilename(filePath: string): LanguageDescription | null {
   const name = filePath.replace(/\\/g, '/').split('/').pop() ?? ''
   if (!name) return null
+  // Match explicit filename patterns (e.g. CMakeLists.txt, Dockerfile, Makefile) before plain-text filters.
+  const byFilename = languages.find((desc) => desc.filename?.test(name))
+  if (byFilename) return byFilename
   const lower = name.toLowerCase()
   const dot = lower.lastIndexOf('.')
-  if (dot > 0) {
-    const ext = lower.slice(dot + 1)
-    if (PLAIN_CODE_LANGUAGES.has(ext)) return null
-  }
+  if (dot > 0 && PLAIN_CODE_LANGUAGES.has(lower.slice(dot + 1))) return null
   return LanguageDescription.matchFilename(languages, name)
+    ?? LanguageDescription.matchFilename(languages, lower)
+}
+
+export function isClickOnScrollbar(event: MouseEvent, container: HTMLElement): boolean {
+  const rect = container.getBoundingClientRect()
+  const onVertical = container.scrollHeight > container.clientHeight
+    && event.clientX >= rect.left + container.clientWidth
+  const onHorizontal = container.scrollWidth > container.clientWidth
+    && event.clientY >= rect.top + container.clientHeight
+  return onVertical || onHorizontal
 }
 
 export function createBaseEditorExtensions(

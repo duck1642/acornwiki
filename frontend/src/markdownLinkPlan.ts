@@ -28,7 +28,7 @@ export function applyMarkdownTargetReplacements(
   return result
 }
 
-interface NoteSnapshot { path: string; content: string; version: string }
+interface NoteSnapshot { path: string; content: string; version: string; has_bom?: boolean }
 interface PlanBridge {
   list_plan_notes(workspaceId: string): Promise<string[]>
   read_plan_notes(workspaceId: string, paths: string[], start: number, maxBytes: number, maxNotes: number): Promise<{ notes: NoteSnapshot[]; next_index: number }>

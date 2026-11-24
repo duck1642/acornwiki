@@ -616,7 +616,7 @@ a:focus-visible {
 .tree-file:hover { color: var(--ink); }
 .tree-folder { gap: 7px; }
 .tree-file { padding-left: 3px; }
-.tree-note.selected { color: var(--accent); }
+.tree-file.selected { color: var(--accent); }
 .tree-disclosure { width: 16px; height: 16px; flex: 0 0 16px; color: var(--ink-muted); display: inline-flex; align-items: center; justify-content: center; }
 .tree-disclosure svg, .outline-caret svg { stroke-width: 2.1; }
 .tree-disclosure.collapsed svg, .outline-caret[aria-expanded="false"] svg { transform: translateX(-0.5px); }
@@ -728,7 +728,13 @@ a:focus-visible {
 }
 .text-editor-host .cm-scroller {
   overflow: auto;
-  padding: 12px 16px 36px;
+  padding: 12px 16px 36px 0;
+}
+.text-editor-host .cm-gutters {
+  padding-left: 12px;
+}
+.text-editor-host .cm-content {
+  padding-left: 4px;
 }
 .text-editor-host .cm-panels {
   margin: 8px 12px 4px;
@@ -768,10 +774,11 @@ a:focus-visible {
   box-shadow: none;
 }
 
-.note-content { min-width: 0; min-height: 0; }
+.note-content { min-width: 0; min-height: 0; max-width: 100%; }
 .note-sheet > .note-content:not([hidden]) { flex: 1; }
 .note-content[hidden] { display: none; }
-.note-content .cm-editor { min-height: 100%; }
+.note-content .cm-editor { min-height: 100%; max-width: 100%; }
+.note-content .cm-scroller { overflow-x: auto; overflow-y: hidden; }
 .note-read { color: var(--ink); overflow-wrap: anywhere; }
 .note-read > :first-child { margin-top: 0; }
 .note-read h1,
