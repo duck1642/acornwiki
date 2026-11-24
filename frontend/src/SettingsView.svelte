@@ -6,9 +6,23 @@
   type ThemeId = 'warm-charcoal' | 'warm-paper'
   type SurfaceMode = 'framed' | 'seamless'
   type PageWidthPreset = '74ch' | '96ch' | '100%'
+  type AppearanceFonts = { ui: string[]; body: string[]; monospace: string[] }
+  type AppearanceFontSizes = { ui: number; body: number; monospace: number }
   type EditorPreferences = { autosave: boolean; auto_reload: boolean; reload_notice: boolean }
-  type AppearancePatch = { theme?: ThemeId; surface_mode?: SurfaceMode; page_width?: PageWidthPreset }
-  type AppearanceView = { theme: ThemeId; surface_mode: SurfaceMode; page_width: string }
+  type AppearancePatch = {
+    theme?: ThemeId
+    surface_mode?: SurfaceMode
+    page_width?: PageWidthPreset
+    fonts?: AppearanceFonts
+    font_sizes?: AppearanceFontSizes
+  }
+  type AppearanceView = {
+    theme: ThemeId
+    surface_mode: SurfaceMode
+    page_width: string
+    fonts: AppearanceFonts
+    font_sizes: AppearanceFontSizes
+  }
   type Scope = 'workspace' | 'application'
 
   let {
@@ -63,6 +77,64 @@
     { value: 'framed', label: 'Framed' },
     { value: 'seamless', label: 'Seamless' },
   ]
+  type FontPreset = { id: string; label: string; stack: string[]; matches?: string[] }
+  const uiFontPresets: FontPreset[] = [
+    { id: 'system', label: 'System UI', stack: ['Segoe UI', 'system-ui', '-apple-system', 'sans-serif'], matches: ['system-ui', 'Segoe UI'] },
+    { id: 'inter', label: 'Inter', stack: ['Inter', 'Segoe UI', 'system-ui', 'sans-serif'], matches: ['Inter'] },
+    { id: 'humanist', label: 'Humanist Sans', stack: ['Calibri', 'Trebuchet MS', 'Segoe UI', 'sans-serif'], matches: ['Calibri'] },
+  ]
+  const bodyFontPresets: FontPreset[] = [
+    { id: 'palatino', label: 'Palatino (Serif)', stack: ['Palatino Linotype', 'Book Antiqua', 'Georgia', 'serif'], matches: ['serif', 'Palatino Linotype'] },
+    { id: 'georgia', label: 'Georgia (Serif)', stack: ['Georgia', 'Cambria', 'Times New Roman', 'serif'], matches: ['Georgia'] },
+    { id: 'sans', label: 'System Sans', stack: ['Segoe UI', 'system-ui', '-apple-system', 'sans-serif'], matches: ['Segoe UI', 'system-ui'] },
+    { id: 'mono', label: 'Monospace', stack: ['Cascadia Code', 'Consolas', 'Courier New', 'monospace'], matches: ['Cascadia Code', 'monospace'] },
+  ]
+  const monoFontPresets: FontPreset[] = [
+    { id: 'cascadia', label: 'Cascadia / Consolas', stack: ['Cascadia Code', 'Consolas', 'Courier New', 'monospace'], matches: ['monospace', 'Cascadia Code', 'Consolas'] },
+    { id: 'jetbrains', label: 'JetBrains / Fira Mono', stack: ['JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', 'monospace'], matches: ['JetBrains Mono', 'Fira Code'] },
+    { id: 'courier', label: 'Courier', stack: ['Courier New', 'Consolas', 'monospace'], matches: ['Courier New'] },
+  ]
+  const colorTokens: { id: string; label: string; cssVar: string; role: string }[] = [
+    { id: 'bg-app', label: 'Canvas', cssVar: '--bg-app', role: 'Outer backdrop' },
+    { id: 'bg-panel', label: 'Panels', cssVar: '--bg-panel', role: 'Sidebars & bars' },
+    { id: 'bg-paper', label: 'Paper', cssVar: '--bg-paper', role: 'Note surface' },
+    { id: 'ink', label: 'Text', cssVar: '--ink', role: 'Primary ink' },
+    { id: 'accent', label: 'Accent', cssVar: '--accent', role: 'Active & focus' },
+    { id: 'link', label: 'Links', cssVar: '--link', role: 'Note & web links' },
+    { id: 'warn', label: 'Warning', cssVar: '--warn', role: 'Unsaved & folders' },
+    { id: 'border', label: 'Borders', cssVar: '--border', role: 'Dividers' },
+  ]
+  const markdownColorTokens: { id: string; label: string; cssVar: string; previewVar: string; role: string }[] = [
+    { id: 'md-h1', label: 'Heading 1', cssVar: '--md-h1', previewVar: '--ink', role: '# Document title' },
+    { id: 'md-h2', label: 'Heading 2', cssVar: '--md-h2', previewVar: '--ink', role: '## Section heading' },
+    { id: 'md-h3', label: 'Heading 3', cssVar: '--md-h3', previewVar: '--ink-muted', role: '### Subsection heading' },
+    { id: 'md-h4', label: 'Heading 4-6', cssVar: '--md-h4', previewVar: '--ink-muted', role: '#### Minor headings' },
+    { id: 'md-emphasis', label: 'Bold & italic', cssVar: '--md-strong', previewVar: '--ink', role: '**Strong** and *emphasis*' },
+    { id: 'md-code', label: 'Inline code', cssVar: '--md-code', previewVar: '--accent', role: '`monospace` spans' },
+    { id: 'md-code-bg', label: 'Code block', cssVar: '--md-code-bg', previewVar: '--bg-panel', role: 'Fenced code surface' },
+    { id: 'md-quote', label: 'Blockquote', cssVar: '--md-quote', previewVar: '--warn', role: '> Quote bar and text' },
+    { id: 'md-link', label: 'Markdown links', cssVar: '--md-link', previewVar: '--link', role: '[Internal & web links]' },
+    { id: 'md-syntax', label: 'Syntax markers', cssVar: '--md-syntax', previewVar: '--ink-faint', role: '#, *, > and fence markers' },
+  ]
+
+  function activeFontPreset(presets: FontPreset[], stack: string[]): FontPreset | undefined {
+    const primary = stack[0] ?? ''
+    return presets.find((preset) => preset.stack[0] === primary || preset.matches?.includes(primary))
+  }
+
+  function fontDisplayLabel(presets: FontPreset[], stack: string[]): string {
+    return activeFontPreset(presets, stack)?.label ?? stack[0] ?? 'Default'
+  }
+
+  function updateFont(kind: keyof AppearanceFonts, stack: string[]) {
+    void onSetAppearance({ fonts: { ...appearance.fonts, [kind]: [...stack] } })
+  }
+
+  function stepFontSize(kind: keyof AppearanceFontSizes, delta: number, min: number, max: number) {
+    const next = Math.min(max, Math.max(min, appearance.font_sizes[kind] + delta))
+    if (next === appearance.font_sizes[kind]) return
+    void onSetAppearance({ font_sizes: { ...appearance.font_sizes, [kind]: next } })
+  }
 
   let scope = $state<Scope>('workspace')
   let query = $state('')
@@ -70,6 +142,10 @@
   let themeMenuOpen = $state(false)
   let surfaceMenuOpen = $state(false)
   let widthMenuOpen = $state(false)
+  let uiFontMenuOpen = $state(false)
+  let bodyFontMenuOpen = $state(false)
+  let monoFontMenuOpen = $state(false)
+  let themeColorsOpen = $state(false)
   let appearanceDisabled = $derived(!workspaceId || appearanceSaving)
   let currentThemeLabel = $derived(themeOptions.find((option) => option.value === appearance.theme)?.label ?? appearance.theme)
   let currentSurfaceLabel = $derived(surfaceOptions.find((option) => option.value === appearance.surface_mode)?.label ?? appearance.surface_mode)
@@ -116,6 +192,14 @@
   let showNewItemsFolder = $derived(matches('new items folder', 'workspace files', 'default folder', 'create', 'root'))
   let showWorkspaceFilesGroup = $derived((searching || scope === 'workspace') && showNewItemsFolder)
 
+  let showUiFont = $derived(matches('interface font', 'ui font', 'typography', 'font', 'size', 'sans'))
+  let showBodyFont = $derived(matches('reading font', 'body font', 'typography', 'font', 'size', 'serif', 'palatino', 'georgia'))
+  let showMonoFont = $derived(matches('editor font', 'code font', 'monospace', 'typography', 'font', 'size', 'cascadia', 'jetbrains'))
+  let showTypographyGroup = $derived((searching || scope === 'workspace') && (showUiFont || showBodyFont || showMonoFont))
+
+  let showThemeColors = $derived(matches('theme colors', 'color overrides', 'colors', 'accent', 'paper', 'canvas', 'palette', 'swatch', 'markdown', 'heading', 'header', 'blockquote', 'code'))
+  let showThemeColorsGroup = $derived((searching || scope === 'workspace') && showThemeColors)
+
   let showExclusions = $derived(matches('exclusions', 'excluded files', 'excluded folders', 'hide', 'ignore', 'index'))
   let showExclusionsGroup = $derived((searching || scope === 'workspace') && showExclusions)
 
@@ -131,7 +215,7 @@
   let showConnectionGroup = $derived((searching || scope === 'application') && showConnection)
 
   let hasAnyMatch = $derived(
-    showAppearanceGroup || showWorkspaceFilesGroup || showExclusionsGroup || showEditorGroup || showFileAccessGroup || showConnectionGroup,
+    showAppearanceGroup || showThemeColorsGroup || showTypographyGroup || showWorkspaceFilesGroup || showExclusionsGroup || showEditorGroup || showFileAccessGroup || showConnectionGroup,
   )
 </script>
 
@@ -270,6 +354,164 @@
               </div>
             {/if}
           </div>
+        </section>
+      {/if}
+
+      {#if showTypographyGroup}
+        <section class="settings-group">
+          <div class="settings-group-header">
+            <h2>Typography</h2>
+            {#if searching}<span class="settings-group-scope">Workspace</span>{/if}
+          </div>
+          <div class="settings-card">
+            {#if showUiFont}
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-label">Interface font</span>
+                  <span class="setting-desc">Font family and size for menus, sidebars, and controls.</span>
+                </div>
+                <div class="setting-control">
+                  <details class="setting-select" bind:open={uiFontMenuOpen}>
+                    <summary aria-label="Interface font" aria-disabled={appearanceDisabled} onclick={(event) => { if (appearanceDisabled) event.preventDefault() }}>
+                      <span>{fontDisplayLabel(uiFontPresets, appearance.fonts.ui)}</span>
+                      <Icon name="chevron-down" size={14} />
+                    </summary>
+                    <PopupMenu class="setting-select-menu" label="Interface font">
+                      {#each uiFontPresets as preset (preset.id)}
+                        {@const selected = activeFontPreset(uiFontPresets, appearance.fonts.ui)?.id === preset.id}
+                        <button class="popup-menu-item" aria-pressed={selected} disabled={appearanceDisabled} onclick={() => { uiFontMenuOpen = false; updateFont('ui', preset.stack) }}>
+                          {preset.label}{#if selected}<span class="popup-menu-mark"><Icon name="check" size={14} /></span>{/if}
+                        </button>
+                      {/each}
+                    </PopupMenu>
+                  </details>
+                  <div class="font-size-stepper" role="group" aria-label="Interface font size">
+                    <button type="button" aria-label="Decrease interface font size" disabled={appearanceDisabled || appearance.font_sizes.ui <= 11} onclick={() => stepFontSize('ui', -1, 11, 18)}>−</button>
+                    <span>{appearance.font_sizes.ui}px</span>
+                    <button type="button" aria-label="Increase interface font size" disabled={appearanceDisabled || appearance.font_sizes.ui >= 18} onclick={() => stepFontSize('ui', 1, 11, 18)}>+</button>
+                  </div>
+                </div>
+              </div>
+            {/if}
+            {#if showBodyFont}
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-label">Reading font</span>
+                  <span class="setting-desc">Font family and size for notes in Read mode.</span>
+                </div>
+                <div class="setting-control">
+                  <details class="setting-select" bind:open={bodyFontMenuOpen}>
+                    <summary aria-label="Reading font" aria-disabled={appearanceDisabled} onclick={(event) => { if (appearanceDisabled) event.preventDefault() }}>
+                      <span>{fontDisplayLabel(bodyFontPresets, appearance.fonts.body)}</span>
+                      <Icon name="chevron-down" size={14} />
+                    </summary>
+                    <PopupMenu class="setting-select-menu" label="Reading font">
+                      {#each bodyFontPresets as preset (preset.id)}
+                        {@const selected = activeFontPreset(bodyFontPresets, appearance.fonts.body)?.id === preset.id}
+                        <button class="popup-menu-item" aria-pressed={selected} disabled={appearanceDisabled} onclick={() => { bodyFontMenuOpen = false; updateFont('body', preset.stack) }}>
+                          {preset.label}{#if selected}<span class="popup-menu-mark"><Icon name="check" size={14} /></span>{/if}
+                        </button>
+                      {/each}
+                    </PopupMenu>
+                  </details>
+                  <div class="font-size-stepper" role="group" aria-label="Reading font size">
+                    <button type="button" aria-label="Decrease reading font size" disabled={appearanceDisabled || appearance.font_sizes.body <= 13} onclick={() => stepFontSize('body', -1, 13, 24)}>−</button>
+                    <span>{appearance.font_sizes.body}px</span>
+                    <button type="button" aria-label="Increase reading font size" disabled={appearanceDisabled || appearance.font_sizes.body >= 24} onclick={() => stepFontSize('body', 1, 13, 24)}>+</button>
+                  </div>
+                </div>
+              </div>
+            {/if}
+            {#if showMonoFont}
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-label">Editor &amp; code font</span>
+                  <span class="setting-desc">Monospace font family and size for Source mode and code blocks.</span>
+                </div>
+                <div class="setting-control">
+                  <details class="setting-select" bind:open={monoFontMenuOpen}>
+                    <summary aria-label="Editor and code font" aria-disabled={appearanceDisabled} onclick={(event) => { if (appearanceDisabled) event.preventDefault() }}>
+                      <span>{fontDisplayLabel(monoFontPresets, appearance.fonts.monospace)}</span>
+                      <Icon name="chevron-down" size={14} />
+                    </summary>
+                    <PopupMenu class="setting-select-menu" label="Editor and code font">
+                      {#each monoFontPresets as preset (preset.id)}
+                        {@const selected = activeFontPreset(monoFontPresets, appearance.fonts.monospace)?.id === preset.id}
+                        <button class="popup-menu-item" aria-pressed={selected} disabled={appearanceDisabled} onclick={() => { monoFontMenuOpen = false; updateFont('monospace', preset.stack) }}>
+                          {preset.label}{#if selected}<span class="popup-menu-mark"><Icon name="check" size={14} /></span>{/if}
+                        </button>
+                      {/each}
+                    </PopupMenu>
+                  </details>
+                  <div class="font-size-stepper" role="group" aria-label="Editor and code font size">
+                    <button type="button" aria-label="Decrease editor font size" disabled={appearanceDisabled || appearance.font_sizes.monospace <= 11} onclick={() => stepFontSize('monospace', -1, 11, 22)}>−</button>
+                    <span>{appearance.font_sizes.monospace}px</span>
+                    <button type="button" aria-label="Increase editor font size" disabled={appearanceDisabled || appearance.font_sizes.monospace >= 22} onclick={() => stepFontSize('monospace', 1, 11, 22)}>+</button>
+                  </div>
+                </div>
+              </div>
+            {/if}
+          </div>
+        </section>
+      {/if}
+
+      {#if showThemeColorsGroup}
+        <section class="settings-group">
+          <div class="settings-group-header">
+            <h2>Theme colors</h2>
+            <span class="settings-group-scope">{searching ? 'Workspace · Coming soon' : 'Coming soon'}</span>
+          </div>
+          <details class="settings-card settings-disclosure" open={searching || themeColorsOpen} ontoggle={(event) => { if (!searching) themeColorsOpen = (event.currentTarget as HTMLDetailsElement).open }}>
+            <summary class="setting-row settings-disclosure-summary">
+              <div class="setting-info">
+                <span class="setting-label">Customize theme colors</span>
+                <span class="setting-desc">Override interface and Markdown color tokens, or import and export themes.</span>
+              </div>
+              <span class="settings-disclosure-chevron" aria-hidden="true"><Icon name="chevron-down" size={15} /></span>
+            </summary>
+            <div class="settings-disclosure-body">
+              <div class="setting-row setting-row-stack">
+                <div class="setting-info">
+                  <span class="setting-label">Interface colors</span>
+                  <span class="setting-desc">Customize semantic color roles for the active theme.</span>
+                </div>
+                <div class="color-token-list" aria-label="Interface color roles">
+                  {#each colorTokens as token (token.id)}
+                    <button class="color-token-item" type="button" disabled title="Not available yet">
+                      <span class="color-token-swatch" style:background={`var(${token.cssVar})`}></span>
+                      <span class="color-token-name">{token.label}</span>
+                      <span class="color-token-role">{token.role}</span>
+                      <span class="color-token-var">{token.cssVar}</span>
+                    </button>
+                  {/each}
+                </div>
+              </div>
+              <div class="setting-row setting-row-stack">
+                <div class="setting-info">
+                  <span class="setting-label">Markdown colors</span>
+                  <span class="setting-desc">Heading levels, code, quotes, links, and syntax markers in Source and Read modes.</span>
+                </div>
+                <div class="color-token-list" aria-label="Markdown color roles">
+                  {#each markdownColorTokens as token (token.id)}
+                    <button class="color-token-item" type="button" disabled title="Not available yet">
+                      <span class="color-token-swatch" style:background={`var(${token.previewVar})`}></span>
+                      <span class="color-token-name">{token.label}</span>
+                      <span class="color-token-role">{token.role}</span>
+                      <span class="color-token-var">{token.cssVar}</span>
+                    </button>
+                  {/each}
+                </div>
+              </div>
+              <div class="setting-row theme-actions-row">
+                <div class="theme-actions-group">
+                  <button class="text-button" type="button" disabled title="Not available yet">Save as new theme</button>
+                  <button class="text-button" type="button" disabled title="Not available yet">Import theme</button>
+                  <button class="text-button" type="button" disabled title="Not available yet">Export theme</button>
+                </div>
+                <button class="text-button" type="button" disabled title="Not available yet">Reset defaults</button>
+              </div>
+            </div>
+          </details>
         </section>
       {/if}
 

@@ -21,14 +21,31 @@
   type ThemeId = 'warm-charcoal' | 'warm-paper'
   type SurfaceMode = 'framed' | 'seamless'
   type PageWidthPreset = '74ch' | '96ch' | '100%'
+  type AppearanceFonts = { ui: string[]; body: string[]; monospace: string[] }
+  type AppearanceFontSizes = { ui: number; body: number; monospace: number }
   type WorkspaceAppearance = {
     theme: string
     surface_mode: string
     page_width?: string
+    fonts?: Partial<AppearanceFonts>
+    font_sizes?: Partial<AppearanceFontSizes>
     file_icons: { set: string; extensions: Record<string, string> }
   }
-  type AppearancePatch = { theme?: ThemeId; surface_mode?: SurfaceMode; page_width?: PageWidthPreset }
-  type AppearanceState = { theme: ThemeId; surface_mode: SurfaceMode; page_width: string; file_icons: WorkspaceAppearance['file_icons'] }
+  type AppearancePatch = {
+    theme?: ThemeId
+    surface_mode?: SurfaceMode
+    page_width?: PageWidthPreset
+    fonts?: AppearanceFonts
+    font_sizes?: AppearanceFontSizes
+  }
+  type AppearanceState = {
+    theme: ThemeId
+    surface_mode: SurfaceMode
+    page_width: string
+    fonts: AppearanceFonts
+    font_sizes: AppearanceFontSizes
+    file_icons: WorkspaceAppearance['file_icons']
+  }
   type TreeApi = {
     ping: () => Promise<string>
     get_settings: () => Promise<{ workspaces: string[]; blocked_extensions: string[]; editor: { autosave: boolean; auto_reload: boolean; reload_notice: boolean } }>
@@ -82,7 +99,25 @@
     theme: 'warm-charcoal',
     surface_mode: 'framed',
     page_width: '74ch',
+    fonts: { ui: ['system-ui'], body: ['serif'], monospace: ['monospace'] },
+    font_sizes: { ui: 14, body: 16, monospace: 14 },
     file_icons: { set: 'minimal', extensions: {} },
+  }
+  const genericFontFamilies = new Set(['serif', 'sans-serif', 'monospace', 'cursive', 'fantasy', 'system-ui', '-apple-system', 'ui-sans-serif', 'ui-serif', 'ui-monospace'])
+  const defaultCssFonts: Record<keyof AppearanceFonts, string> = {
+    ui: "'Segoe UI', system-ui, -apple-system, sans-serif",
+    body: "'Palatino Linotype', 'Book Antiqua', Georgia, serif",
+    monospace: "'Cascadia Code', Consolas, 'Courier New', monospace",
+  }
+  function toCssFontStack(kind: keyof AppearanceFonts, stack: string[]): string {
+    const cleaned = stack.map((item) => item.trim()).filter(Boolean)
+    if (cleaned.length === 0) return defaultCssFonts[kind]
+    if (cleaned.length === 1) {
+      if (kind === 'ui' && cleaned[0] === 'system-ui') return defaultCssFonts.ui
+      if (kind === 'body' && cleaned[0] === 'serif') return defaultCssFonts.body
+      if (kind === 'monospace' && cleaned[0] === 'monospace') return defaultCssFonts.monospace
+    }
+    return cleaned.map((name) => (genericFontFamilies.has(name) || /^['"].*['"]$/.test(name) ? name : `'${name.replace(/'/g, "\\'")}'`)).join(', ')
   }
   const pageWidthPresets: { value: PageWidthPreset; label: string; title: string }[] = [
     { value: '74ch', label: 'Readable', title: 'Readable width (74ch)' },
@@ -224,8 +259,15 @@
     setFileIconColors(document.documentElement)
   })
   $effect(() => {
-    document.documentElement.dataset.surface = effectiveSurface
-    document.documentElement.style.setProperty('--page-width', effectivePageWidth)
+    const root = document.documentElement
+    root.dataset.surface = effectiveSurface
+    root.style.setProperty('--page-width', effectivePageWidth)
+    root.style.setProperty('--font-ui', toCssFontStack('ui', appearance.fonts.ui))
+    root.style.setProperty('--font-body', toCssFontStack('body', appearance.fonts.body))
+    root.style.setProperty('--font-mono', toCssFontStack('monospace', appearance.fonts.monospace))
+    root.style.setProperty('--font-size-ui', `${appearance.font_sizes.ui}px`)
+    root.style.setProperty('--font-size-body', `${appearance.font_sizes.body}px`)
+    root.style.setProperty('--font-size-mono', `${appearance.font_sizes.monospace}px`)
   })
 
   $effect(() => {
@@ -755,10 +797,22 @@
     const rawWidth = typeof value.page_width === 'string' ? value.page_width : defaultAppearance.page_width
     const widthMatch = /^(\d+(?:\.\d+)?)(ch|rem|px|vw|%)$/.exec(rawWidth)
     const pageWidth = widthMatch && Number(widthMatch[1]) > 0 ? rawWidth : defaultAppearance.page_width
+    const normalizeStack = (raw: unknown, fallback: string[]) => (Array.isArray(raw) && raw.every((item) => typeof item === 'string') && raw.length ? [...raw] : [...fallback])
+    const normalizeSize = (raw: unknown, fallback: number) => (typeof raw === 'number' && Number.isInteger(raw) && raw > 0 ? raw : fallback)
     return {
       theme: value.theme === 'warm-paper' ? 'warm-paper' : 'warm-charcoal',
       surface_mode: value.surface_mode === 'seamless' ? 'seamless' : 'framed',
       page_width: pageWidth,
+      fonts: {
+        ui: normalizeStack(value.fonts?.ui, defaultAppearance.fonts.ui),
+        body: normalizeStack(value.fonts?.body, defaultAppearance.fonts.body),
+        monospace: normalizeStack(value.fonts?.monospace, defaultAppearance.fonts.monospace),
+      },
+      font_sizes: {
+        ui: normalizeSize(value.font_sizes?.ui, defaultAppearance.font_sizes.ui),
+        body: normalizeSize(value.font_sizes?.body, defaultAppearance.font_sizes.body),
+        monospace: normalizeSize(value.font_sizes?.monospace, defaultAppearance.font_sizes.monospace),
+      },
       file_icons: value.file_icons,
     }
   }
