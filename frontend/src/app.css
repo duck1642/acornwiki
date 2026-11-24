@@ -779,6 +779,11 @@ a:focus-visible {
 .note-content[hidden] { display: none; }
 .note-content .cm-editor { min-height: 100%; max-width: 100%; }
 .note-content .cm-scroller { overflow-x: auto; overflow-y: hidden; }
+/* In source mode, keep both scrollbars on the visible editor instead of the long page. */
+.note-scroll:has(.note-content:not([hidden]):not(.note-read)) { overflow: hidden; }
+.note-sheet:has(.note-content:not([hidden]):not(.note-read)) { height: 100%; }
+.note-content:not(.note-read) .cm-editor { height: 100%; }
+.note-content:not(.note-read) .cm-scroller { overflow: auto; }
 .note-read { color: var(--ink); overflow-wrap: anywhere; }
 .note-read > :first-child { margin-top: 0; }
 .note-read h1,

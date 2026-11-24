@@ -1,5 +1,5 @@
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
-import { ensureSyntaxTree } from '@codemirror/language'
+import { ensureSyntaxTree, foldNodeProp } from '@codemirror/language'
 import { EditorSelection, EditorState, type Extension } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { classHighlighter, highlightTree } from '@lezer/highlight'
@@ -125,7 +125,8 @@ const markdownShortcuts = [
 export function createMarkdownEditorExtensions(extra: Extension[]): Extension[] {
   return createBaseEditorExtensions(
     [
-      markdown({ base: markdownLanguage, codeLanguages: resolveCodeLanguage }),
+      // Keep structural folding while treating ordinary multiline paragraphs as text.
+      markdown({ base: markdownLanguage, codeLanguages: resolveCodeLanguage, extensions: { props: [foldNodeProp.add({ Paragraph: () => null })] } }),
       ...extra,
     ],
     markdownShortcuts,

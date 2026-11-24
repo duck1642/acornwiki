@@ -1,11 +1,21 @@
 import assert from 'node:assert/strict'
 import { EditorSelection, EditorState } from '@codemirror/state'
+import { ensureSyntaxTree, foldable } from '@codemirror/language'
 import { keymap } from '@codemirror/view'
 import { createServer } from 'vite'
 
 const server = await createServer({ server: { middlewareMode: true }, appType: 'custom' })
 try {
   const { createMarkdownEditorExtensions } = await server.ssrLoadModule('/src/markdownEditor.ts')
+
+  function foldAtFirstLine(doc) {
+    const state = EditorState.create({ doc, extensions: createMarkdownEditorExtensions([]) })
+    ensureSyntaxTree(state, doc.length)
+    return foldable(state, 0, state.doc.line(1).to)
+  }
+  assert.equal(foldAtFirstLine('First line\nSecond line'), null)
+  assert.ok(foldAtFirstLine('# Heading\n\nBody text'))
+  assert.ok(foldAtFirstLine('```js\nconst x = 1\n```'))
 
   function editor(doc, from, to) {
     return {
