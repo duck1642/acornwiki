@@ -15,7 +15,7 @@
     wordWrapExtension,
   } from './markdownEditor'
   import { noteLineEndings, noteText } from './noteLineEndings'
-  import type { EditorPreferences, EditorStatus, FlatOutlineHeading } from './sharedTypes'
+  import type { EditorPreferences, EditorStatus, FlatOutlineHeading, PageWidthPreset, SurfaceMode } from './sharedTypes'
 
   const markdownParser = new Marked()
 
@@ -34,6 +34,11 @@
     editorPreferences,
     showLineNumbers = false,
     wordWrap = true,
+    readSurface = 'seamless',
+    onSetReadSurface,
+    pageWidth = '96ch',
+    pageWidthPresets = [],
+    onSetPageWidth,
     canGoBack = false,
     canGoForward = false,
     onNavigateBack,
@@ -51,6 +56,11 @@
     editorPreferences: EditorPreferences
     showLineNumbers?: boolean
     wordWrap?: boolean
+    readSurface?: SurfaceMode
+    onSetReadSurface?: (surface: SurfaceMode) => void | Promise<void>
+    pageWidth?: string
+    pageWidthPresets?: { value: PageWidthPreset; label: string; title: string }[]
+    onSetPageWidth?: (width: PageWidthPreset) => void | Promise<void>
     canGoBack?: boolean
     canGoForward?: boolean
     onNavigateBack?: () => void
@@ -69,6 +79,7 @@
   const wordWrapCompartment = new Compartment()
 
   let mode = $state<'source' | 'read'>('source')
+  let moreMenuOpen = $state(false)
   let outlineReady = $state(false)
   let mediaUrl = $state('')
 
@@ -306,9 +317,9 @@
     if (event.button !== 0 || mode !== 'source' || !session.path || !view || freezeEditors || session.prompt) return
     const target = event.target as HTMLElement | null
     if (!target) return
-    const scroller = event.currentTarget as HTMLElement | null
+    const scroller = target.closest<HTMLElement>('.cm-scroller') ?? (event.currentTarget as HTMLElement | null)
     if (scroller && isClickOnScrollbar(event, scroller)) return
-    if (target.closest('.cm-editor') || target.closest('button, a, input, summary')) return
+    if (target.closest('.cm-content') || target.closest('.cm-gutters') || target.closest('.cm-panels') || target.closest('button, a, input, summary')) return
     event.preventDefault()
     const end = view.state.doc.length
     view.dispatch({ selection: { anchor: end } })
@@ -370,11 +381,22 @@
       <button onclick={() => mode = 'source'} aria-pressed={mode === 'source'} aria-label="Source" title="Source"><Icon name="source-code" /></button>
       <button onclick={() => mode = 'read'} aria-pressed={mode === 'read'} aria-label="Read" title="Read"><Icon name="book-open" /></button>
       <button onclick={() => session.save()} disabled={!session.dirty || session.saving || session.conflict || freezeEditors || session.prompt} aria-label="Save" title="Save"><Icon name="save" /></button>
-      <details class="note-more-menu">
+      <details class="note-more-menu" bind:open={moreMenuOpen}>
         <summary aria-label="More note actions" title="More note actions"><Icon name="ellipsis" /></summary>
         <PopupMenu class="note-more-content">
           <button class="popup-menu-item" disabled title="Not available yet">Rename</button>
           <button class="popup-menu-item" disabled title="Not available yet">Copy</button>
+          <div class="popup-menu-divider"></div>
+          <strong>Read surface</strong>
+          <button class="popup-menu-item" aria-pressed={readSurface === 'framed'} onclick={() => { moreMenuOpen = false; void onSetReadSurface?.('framed') }}>Framed{#if readSurface === 'framed'}<span class="popup-menu-mark"><Icon name="check" size={14} /></span>{/if}</button>
+          <button class="popup-menu-item" aria-pressed={readSurface === 'seamless'} onclick={() => { moreMenuOpen = false; void onSetReadSurface?.('seamless') }}>Seamless{#if readSurface === 'seamless'}<span class="popup-menu-mark"><Icon name="check" size={14} /></span>{/if}</button>
+          {#if pageWidthPresets.length}
+            <div class="popup-menu-divider"></div>
+            <strong>Page width</strong>
+            {#each pageWidthPresets as preset (preset.value)}
+              <button class="popup-menu-item" aria-pressed={pageWidth === preset.value} title={preset.title} onclick={() => { moreMenuOpen = false; void onSetPageWidth?.(preset.value) }}>{preset.label}{#if pageWidth === preset.value}<span class="popup-menu-mark"><Icon name="check" size={14} /></span>{/if}</button>
+            {/each}
+          {/if}
         </PopupMenu>
       </details>
     {/if}

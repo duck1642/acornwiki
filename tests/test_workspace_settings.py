@@ -38,8 +38,8 @@ class WorkspaceSettingsTests(unittest.TestCase):
         appearance = settings["appearance"]
         assert isinstance(appearance, dict)
         self.assertEqual(appearance["theme"], "warm-charcoal")
-        self.assertEqual(appearance["surface_mode"], "framed")
-        self.assertEqual(appearance["page_width"], "74ch")
+        self.assertEqual(appearance["surface_mode"], "seamless")
+        self.assertEqual(appearance["page_width"], "96ch")
         self.assertEqual(appearance["file_icons"], {"set": "minimal", "extensions": {}})
 
     def test_unknown_theme_and_icon_set_ids_are_preserved(self) -> None:
@@ -78,15 +78,15 @@ class WorkspaceSettingsTests(unittest.TestCase):
 
         bridge.set_workspace_appearance(
             snapshot["workspace_id"],
-            {"theme": "warm-paper", "surface_mode": "seamless"},
+            {"theme": "warm-paper", "surface_mode": "framed"},
         )
 
         updated = load_workspace_settings(root)
         appearance = updated["appearance"]
         assert isinstance(appearance, dict)
         self.assertEqual(appearance["theme"], "warm-paper")
-        self.assertEqual(appearance["surface_mode"], "seamless")
-        self.assertEqual(appearance["page_width"], "74ch")
+        self.assertEqual(appearance["surface_mode"], "framed")
+        self.assertEqual(appearance["page_width"], "96ch")
         self.assertFalse(updated["automatic_link_update"])
         self.assertEqual(updated["attachment_folder"], "assets")
 

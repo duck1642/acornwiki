@@ -155,7 +155,6 @@ a:focus-visible {
 .view-menu > summary { list-style: none; cursor: pointer; }
 .view-menu > summary::-webkit-details-marker { display: none; }
 .view-menu-content { top: calc(100% + 6px); left: 0; min-width: 180px; }
-.view-menu-content strong { display: block; padding: 6px; color: var(--ink-muted); font-size: 0.7857rem; }
 .menu-sidebar-toggle { width: 42px; height: 28px; display: inline-flex; align-items: center; justify-content: center; margin-right: 0; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--ink-muted); }
 .menu-sidebar-toggle:hover { color: var(--ink); }
 .menu-sidebar-toggle svg { display: block; width: 17px; height: 17px; }
@@ -211,6 +210,7 @@ a:focus-visible {
   background: var(--bg-panel);
   box-shadow: 0 10px 24px color-mix(in srgb, #000 24%, transparent);
 }
+.popup-menu strong { display: block; padding: 6px; color: var(--ink-muted); font-size: 0.7857rem; }
 .popup-menu-item { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 28px; padding: 6px; border: 0; background: transparent; color: var(--ink-muted); text-align: left; font-size: 0.8571rem; cursor: pointer; }
 .popup-menu-item:hover { color: var(--ink); }
 .popup-menu-item:disabled { opacity: 0.5; cursor: default; }
@@ -728,13 +728,13 @@ a:focus-visible {
 }
 .text-editor-host .cm-scroller {
   overflow: auto;
-  padding: 12px 16px 36px 0;
+  padding: 0;
 }
 .text-editor-host .cm-gutters {
   padding-left: 4px;
 }
 .text-editor-host .cm-content {
-  padding-left: 2px;
+  padding: 12px 24px 96px 2px;
 }
 .text-editor-host .cm-scroller:not(:has(.cm-gutters)) .cm-content {
   padding-left: 16px;
@@ -751,7 +751,7 @@ a:focus-visible {
 .note-scroll { flex: 1; min-width: 0; min-height: 0; overflow: auto; padding: 18px 22px; background: var(--bg-app); }
 .note-sheet {
   width: 100%;
-  max-width: var(--page-width, 74ch);
+  max-width: var(--page-width, 96ch);
   min-height: 100%;
   margin: 0 auto;
   display: flex;
@@ -767,10 +767,10 @@ a:focus-visible {
   line-height: 1.7;
 }
 
-:root[data-surface='seamless'] .note-scroll { background: var(--bg-paper); }
+:root[data-surface='seamless'] .note-scroll { padding: 0; background: var(--bg-paper); }
 :root[data-surface='seamless'] .note-sheet {
   min-height: 100%;
-  padding: 24px 22px 36px;
+  padding: 28px 36px 48px;
   border-color: transparent;
   border-radius: 0;
   background: transparent;
@@ -782,11 +782,43 @@ a:focus-visible {
 .note-content[hidden] { display: none; }
 .note-content .cm-editor { min-height: 100%; max-width: 100%; }
 .note-content .cm-scroller { overflow-x: auto; overflow-y: hidden; }
-/* In source mode, keep both scrollbars on the visible editor instead of the long page. */
-.note-scroll:has(.note-content:not([hidden]):not(.note-read)) { overflow: hidden; }
-.note-sheet:has(.note-content:not([hidden]):not(.note-read)) { height: 100%; }
+/* Source mode is always full-pane seamless so scrollbars sit on viewport edges and line numbers/no-wrap never fight a card border. Framed surface applies to Read mode. */
+.note-scroll:has(.note-content:not([hidden]):not(.note-read)) {
+  overflow: hidden;
+  padding: 0;
+  background: var(--bg-paper);
+}
+.note-sheet:has(.note-content:not([hidden]):not(.note-read)) {
+  max-width: none;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  overflow: hidden;
+}
 .note-content:not(.note-read) .cm-editor { height: 100%; }
-.note-content:not(.note-read) .cm-scroller { overflow: auto; }
+.note-content:not(.note-read) .cm-scroller { overflow: auto; padding: 0; }
+.note-content:not(.note-read) .cm-panels { margin: 8px 12px 0; }
+.note-content:not(.note-read) .cm-scroller:has(.cm-lineWrapping) {
+  justify-content: center;
+}
+.note-content:not(.note-read) .cm-scroller:has(.cm-lineWrapping) .cm-gutters {
+  padding-left: 12px;
+}
+.note-content:not(.note-read) .cm-content.cm-lineWrapping {
+  flex: 0 1 var(--page-width, 96ch);
+  min-width: 0;
+  max-width: var(--page-width, 96ch);
+  padding: 24px 28px 72px 0;
+}
+.note-content:not(.note-read) .cm-scroller:not(:has(.cm-lineWrapping)) .cm-gutters {
+  padding-left: 6px;
+}
+.note-content:not(.note-read) .cm-scroller:not(:has(.cm-lineWrapping)) .cm-content {
+  padding: 16px 28px 72px 2px;
+}
 .note-read { color: var(--ink); overflow-wrap: anywhere; }
 .note-read > :first-child { margin-top: 0; }
 .note-read h1,
@@ -1051,7 +1083,7 @@ a:focus-visible {
   .bulk-close-dialog { padding: 16px; }
   .note-scroll { flex: 1 1 auto; min-height: 0; padding: 10px; }
   .note-sheet { min-height: 100%; padding: 22px 20px 30px; }
-  :root[data-surface='seamless'] .note-sheet { padding: 18px 10px 26px; }
+  :root[data-surface='seamless'] .note-sheet { padding: 18px 16px 26px; }
   .note-outline { flex: 0 0 auto; max-height: 190px; border-top: 1px solid var(--border); border-left: 0; }
   .outline-title { padding: 10px 12px 5px; }
   .outline-nav { padding: 0 8px 8px; }

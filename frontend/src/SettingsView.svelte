@@ -8,8 +8,6 @@
     AppearancePatch,
     AppearanceView,
     EditorPreferences,
-    PageWidthPreset,
-    SurfaceMode,
     ThemeId,
   } from './sharedTypes'
 
@@ -20,7 +18,6 @@
     workspaceId,
     appearance,
     appearanceSaving,
-    pageWidthPresets,
     editorPreferences,
     editorPreferencesLoaded,
     editorPreferenceSaving,
@@ -42,7 +39,6 @@
     workspaceId: string | null
     appearance: AppearanceView
     appearanceSaving: boolean
-    pageWidthPresets: { value: PageWidthPreset; label: string; title: string }[]
     editorPreferences: EditorPreferences
     editorPreferencesLoaded: boolean
     editorPreferenceSaving: Partial<Record<keyof EditorPreferences, boolean>>
@@ -64,10 +60,6 @@
   const themeOptions: { value: ThemeId; label: string }[] = [
     { value: 'warm-charcoal', label: 'Warm Charcoal' },
     { value: 'warm-paper', label: 'Warm Paper' },
-  ]
-  const surfaceOptions: { value: SurfaceMode; label: string }[] = [
-    { value: 'framed', label: 'Framed' },
-    { value: 'seamless', label: 'Seamless' },
   ]
   type FontPreset = { id: string; label: string; stack: string[]; matches?: string[] }
   const uiFontPresets: FontPreset[] = [
@@ -147,8 +139,6 @@
   let query = $state('')
   let newExtension = $state('')
   let themeMenuOpen = $state(false)
-  let surfaceMenuOpen = $state(false)
-  let widthMenuOpen = $state(false)
   let uiFontMenuOpen = $state(false)
   let bodyFontMenuOpen = $state(false)
   let monoFontMenuOpen = $state(false)
@@ -158,8 +148,6 @@
   let themeColorsOpen = $state(false)
   let appearanceDisabled = $derived(!workspaceId || appearanceSaving)
   let currentThemeLabel = $derived(themeOptions.find((option) => option.value === appearance.theme)?.label ?? appearance.theme)
-  let currentSurfaceLabel = $derived(surfaceOptions.find((option) => option.value === appearance.surface_mode)?.label ?? appearance.surface_mode)
-  let currentWidthLabel = $derived(pageWidthPresets.find((preset) => preset.value === appearance.page_width)?.label ?? appearance.page_width)
   let blockedList = $derived(blockedExtensions.split(/[\s,]+/).map((item) => item.trim()).filter(Boolean))
   let normalizedQuery = $derived(query.trim().toLowerCase())
   let searching = $derived(normalizedQuery.length > 0)
@@ -193,9 +181,7 @@
   }
 
   let showTheme = $derived(matches('theme', 'warm charcoal', 'warm paper', 'color', 'palette', 'appearance'))
-  let showSurface = $derived(matches('document surface', 'framed', 'seamless', 'appearance', 'canvas', 'card'))
-  let showPageWidth = $derived(matches('page width', 'readable', 'wide', 'full', 'line width', 'appearance'))
-  let showAppearanceGroup = $derived((searching || scope === 'workspace') && (showTheme || showSurface || showPageWidth))
+  let showAppearanceGroup = $derived((searching || scope === 'workspace') && showTheme)
 
   let showNewItemsFolder = $derived(matches('new items folder', 'workspace files', 'default folder', 'create', 'root'))
   let showWorkspaceFilesGroup = $derived((searching || scope === 'workspace') && showNewItemsFolder)
@@ -302,59 +288,6 @@
                           disabled={appearanceDisabled}
                           onclick={() => { themeMenuOpen = false; void onSetAppearance({ theme: option.value }) }}
                         >{option.label}{#if appearance.theme === option.value}<span class="popup-menu-mark"><Icon name="check" size={14} /></span>{/if}</button>
-                      {/each}
-                    </PopupMenu>
-                  </details>
-                </div>
-              </div>
-            {/if}
-            {#if showSurface}
-              <div class="setting-row">
-                <div class="setting-info">
-                  <span class="setting-label">Default document surface</span>
-                  <span class="setting-desc">Framed paper card on canvas or seamless full-width surface.</span>
-                </div>
-                <div class="setting-control">
-                  <details class="setting-select" bind:open={surfaceMenuOpen}>
-                    <summary aria-label="Default document surface" aria-disabled={appearanceDisabled} onclick={(event) => { if (appearanceDisabled) event.preventDefault() }}>
-                      <span>{currentSurfaceLabel}</span>
-                      <Icon name="chevron-down" size={14} />
-                    </summary>
-                    <PopupMenu class="setting-select-menu" label="Default document surface">
-                      {#each surfaceOptions as option (option.value)}
-                        <button
-                          class="popup-menu-item"
-                          aria-pressed={appearance.surface_mode === option.value}
-                          disabled={appearanceDisabled}
-                          onclick={() => { surfaceMenuOpen = false; void onSetAppearance({ surface_mode: option.value }) }}
-                        >{option.label}{#if appearance.surface_mode === option.value}<span class="popup-menu-mark"><Icon name="check" size={14} /></span>{/if}</button>
-                      {/each}
-                    </PopupMenu>
-                  </details>
-                </div>
-              </div>
-            {/if}
-            {#if showPageWidth}
-              <div class="setting-row">
-                <div class="setting-info">
-                  <span class="setting-label">Default page width</span>
-                  <span class="setting-desc">Maximum line width for reading and editing notes.</span>
-                </div>
-                <div class="setting-control">
-                  <details class="setting-select" bind:open={widthMenuOpen}>
-                    <summary aria-label="Default page width" aria-disabled={appearanceDisabled} onclick={(event) => { if (appearanceDisabled) event.preventDefault() }}>
-                      <span>{currentWidthLabel}</span>
-                      <Icon name="chevron-down" size={14} />
-                    </summary>
-                    <PopupMenu class="setting-select-menu" label="Default page width">
-                      {#each pageWidthPresets as preset (preset.value)}
-                        <button
-                          class="popup-menu-item"
-                          aria-pressed={appearance.page_width === preset.value}
-                          disabled={appearanceDisabled}
-                          title={preset.title}
-                          onclick={() => { widthMenuOpen = false; void onSetAppearance({ page_width: preset.value }) }}
-                        >{preset.label}{#if appearance.page_width === preset.value}<span class="popup-menu-mark"><Icon name="check" size={14} /></span>{/if}</button>
                       {/each}
                     </PopupMenu>
                   </details>

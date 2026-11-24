@@ -32,8 +32,8 @@ def default_workspace_appearance() -> dict[str, object]:
     """Return a new set of default workspace appearance settings."""
     return {
         "theme": "warm-charcoal",
-        "surface_mode": "framed",
-        "page_width": "74ch",
+        "surface_mode": "seamless",
+        "page_width": "96ch",
         "fonts": {
             "ui": ["system-ui"],
             "body": ["serif"],

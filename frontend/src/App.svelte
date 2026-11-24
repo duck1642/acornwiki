@@ -113,8 +113,8 @@
 
   const defaultAppearance: AppearanceState = {
     theme: 'warm-charcoal',
-    surface_mode: 'framed',
-    page_width: '74ch',
+    surface_mode: 'seamless',
+    page_width: '96ch',
     fonts: { ui: ['system-ui'], body: ['serif'], monospace: ['monospace'] },
     font_sizes: { ui: 14, body: 16, monospace: 14 },
     font_weights: { ui: 400, body: 400, monospace: 400 },
@@ -162,10 +162,6 @@
   let selectedWorkspace = $state<string | null>(null)
   let workspaceId = $state<string | null>(null)
   let appearance = $state<AppearanceState>(defaultAppearance)
-  let sessionSurface = $state<SurfaceMode | null>(null)
-  let sessionPageWidth = $state<PageWidthPreset | null>(null)
-  let effectiveSurface = $derived(sessionSurface ?? appearance.surface_mode)
-  let effectivePageWidth = $derived(sessionPageWidth ?? appearance.page_width)
   let viewMenuOpen = $state(false)
   let editorViewSettings = $state<Record<DocumentKind, EditorViewSettings>>({
     markdown: { lineNumbers: false, wordWrap: true },
@@ -277,8 +273,8 @@
   })
   $effect(() => {
     const root = document.documentElement
-    root.dataset.surface = effectiveSurface
-    root.style.setProperty('--page-width', effectivePageWidth)
+    root.dataset.surface = appearance.surface_mode
+    root.style.setProperty('--page-width', appearance.page_width)
     root.style.setProperty('--font-ui', toCssFontStack('ui', appearance.fonts.ui))
     root.style.setProperty('--font-body', toCssFontStack('body', appearance.fonts.body))
     root.style.setProperty('--font-mono', toCssFontStack('monospace', appearance.fonts.monospace))
@@ -857,7 +853,7 @@
       console.warn(`Unsupported workspace theme "${value.theme}". Using Warm Charcoal in the interface.`)
     }
     if (value.surface_mode !== 'framed' && value.surface_mode !== 'seamless') {
-      console.warn(`Unsupported workspace surface "${value.surface_mode}". Using Framed in the interface.`)
+      console.warn(`Unsupported workspace surface "${value.surface_mode}". Using Seamless in the interface.`)
     }
     if (value.file_icons.set !== 'minimal') {
       console.warn(`Unsupported workspace file icon set "${value.file_icons.set}". Using the minimal icon set in the interface.`)
@@ -873,7 +869,7 @@
     const normalizeWeight = (raw: unknown, fallback: number) => (typeof raw === 'number' && Number.isInteger(raw) && raw >= 100 && raw <= 900 ? raw : fallback)
     return {
       theme: value.theme === 'warm-paper' ? 'warm-paper' : 'warm-charcoal',
-      surface_mode: value.surface_mode === 'seamless' ? 'seamless' : 'framed',
+      surface_mode: value.surface_mode === 'framed' ? 'framed' : 'seamless',
       page_width: pageWidth,
       fonts: {
         ui: normalizeStack(value.fonts?.ui, defaultAppearance.fonts.ui),
@@ -1119,20 +1115,9 @@
       <button class="menu-item" disabled title="This menu is not available yet">Edit</button>
       <details class="view-menu" bind:open={viewMenuOpen}>
         <summary class="menu-item">View</summary>
-        <PopupMenu class="view-menu-content" label="Session view options">
-          <strong>Document surface</strong>
-          <button class="popup-menu-item" aria-pressed={effectiveSurface === 'framed'} onclick={() => { sessionSurface = 'framed'; viewMenuOpen = false }}>Framed{#if effectiveSurface === 'framed'}<span class="popup-menu-mark"><Icon name="check" size={14} /></span>{/if}</button>
-          <button class="popup-menu-item" aria-pressed={effectiveSurface === 'seamless'} onclick={() => { sessionSurface = 'seamless'; viewMenuOpen = false }}>Seamless{#if effectiveSurface === 'seamless'}<span class="popup-menu-mark"><Icon name="check" size={14} /></span>{/if}</button>
-          <div class="popup-menu-divider"></div>
-          <strong>Page width</strong>
-          {#each pageWidthPresets as preset (preset.value)}
-            <button class="popup-menu-item" aria-pressed={effectivePageWidth === preset.value} title={preset.title} onclick={() => { sessionPageWidth = preset.value; viewMenuOpen = false }}>{preset.label}{#if effectivePageWidth === preset.value}<span class="popup-menu-mark"><Icon name="check" size={14} /></span>{/if}</button>
-          {/each}
-          <div class="popup-menu-divider"></div>
+        <PopupMenu class="view-menu-content" label="View options">
           <button class="popup-menu-item" disabled={!activeViewSettings} aria-pressed={activeViewSettings?.lineNumbers ?? false} onclick={() => toggleEditorViewSetting('lineNumbers')}>Line numbers{#if activeViewSettings?.lineNumbers}<span class="popup-menu-mark"><Icon name="check" size={14} /></span>{/if}</button>
           <button class="popup-menu-item" disabled={!activeViewSettings} aria-pressed={activeViewSettings?.wordWrap ?? false} onclick={() => toggleEditorViewSetting('wordWrap')}>Word wrap{#if activeViewSettings?.wordWrap}<span class="popup-menu-mark"><Icon name="check" size={14} /></span>{/if}</button>
-          <div class="popup-menu-divider"></div>
-          <button class="popup-menu-item" onclick={() => { sessionSurface = null; sessionPageWidth = null; viewMenuOpen = false }}>Use workspace default</button>
         </PopupMenu>
       </details>
       <button class="menu-item" disabled title="This menu is not available yet">Navigate</button>
@@ -1323,6 +1308,11 @@
                 {editorPreferences}
                 showLineNumbers={editorViewSettings.markdown.lineNumbers}
                 wordWrap={editorViewSettings.markdown.wordWrap}
+                readSurface={appearance.surface_mode}
+                onSetReadSurface={(surface) => setAppearance({ surface_mode: surface })}
+                pageWidth={appearance.page_width}
+                {pageWidthPresets}
+                onSetPageWidth={(width) => setAppearance({ page_width: width })}
                 {canGoBack}
                 {canGoForward}
                 onNavigateBack={navigateBack}
@@ -1358,7 +1348,6 @@
               {workspaceId}
               {appearance}
               {appearanceSaving}
-              {pageWidthPresets}
               {editorPreferences}
               {editorPreferencesLoaded}
               {editorPreferenceSaving}
@@ -1411,7 +1400,7 @@
   </div>
   <footer class="status-bar">
     <span>{selectedWorkspace ?? 'No workspace selected'}</span>
-    <span>{selectedNote ?? 'No note open'} · {appearance.theme === 'warm-paper' ? 'Warm Paper' : 'Warm Charcoal'} · {effectiveSurface === 'seamless' ? 'Seamless' : 'Framed'}</span>
+    <span>{selectedNote ?? 'No note open'} · {appearance.theme === 'warm-paper' ? 'Warm Paper' : 'Warm Charcoal'}</span>
   </footer>
   {#if bulkClose}
     <div class="bulk-close-backdrop">
