@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { tick } from 'svelte'
   import Icon from './Icon.svelte'
   import PopupMenu from './PopupMenu.svelte'
 
@@ -37,14 +36,15 @@
     settingsMessage,
     creationFolderInput = $bindable(),
     folderSettingsMessage,
-    blockedExtensions = $bindable(),
+    blockedExtensions,
     blockedMessage,
+    blockedSaving,
     ready,
     connectionMessage,
     onSetAppearance,
     onSetEditorPreference,
     onSaveCreationFolder,
-    onSaveBlockedExtensions,
+    onUpdateBlockedExtensions,
     onPing,
   }: {
     active: boolean
@@ -60,12 +60,13 @@
     folderSettingsMessage: string
     blockedExtensions: string
     blockedMessage: string
+    blockedSaving: boolean
     ready: boolean
     connectionMessage: string
     onSetAppearance: (patch: AppearancePatch) => void | Promise<void>
     onSetEditorPreference: (key: keyof EditorPreferences, input: HTMLInputElement) => void | Promise<void>
     onSaveCreationFolder: () => void | Promise<void>
-    onSaveBlockedExtensions: () => void | Promise<void>
+    onUpdateBlockedExtensions: (transform: (current: string[]) => string[]) => Promise<boolean>
     onPing: () => void | Promise<void>
   } = $props()
 
@@ -157,26 +158,21 @@
   async function addBlockedExtension() {
     const raw = newExtension.split(/[\s,]+/).map((item) => item.trim().toLowerCase()).filter(Boolean)
     if (!raw.length) return
-    const existing = new Set(blockedList.map((item) => item.toLowerCase()))
-    const additions: string[] = []
-    for (const token of raw) {
-      const normalized = token.startsWith('.') ? token : `.${token}`
-      if (!existing.has(normalized)) {
-        existing.add(normalized)
-        additions.push(normalized)
-      }
-    }
-    newExtension = ''
-    if (!additions.length) return
-    blockedExtensions = [...blockedList, ...additions].join(', ')
-    await tick()
-    await onSaveBlockedExtensions()
+    const normalized = raw.map((token) => (token.startsWith('.') ? token : `.${token}`))
+    const saved = await onUpdateBlockedExtensions((current) => {
+      const existing = new Set(current.map((item) => item.toLowerCase()))
+      const additions = normalized.filter((item) => {
+        if (existing.has(item)) return false
+        existing.add(item)
+        return true
+      })
+      return additions.length ? [...current, ...additions] : current
+    })
+    if (saved) newExtension = ''
   }
 
   async function removeBlockedExtension(target: string) {
-    blockedExtensions = blockedList.filter((item) => item !== target).join(', ')
-    await tick()
-    await onSaveBlockedExtensions()
+    await onUpdateBlockedExtensions((current) => current.filter((item) => item !== target))
   }
 
   function matches(...terms: string[]): boolean {
@@ -667,7 +663,7 @@
                     placeholder=".exe"
                     bind:value={newExtension}
                   />
-                  <button class="text-button" type="submit" disabled={!newExtension.trim()}>Add</button>
+                  <button class="text-button" type="submit" disabled={blockedSaving || !newExtension.trim()}>Add</button>
                 </form>
               </div>
               {#if blockedList.length}
@@ -680,6 +676,7 @@
                         class="extension-chip-remove"
                         aria-label={`Remove ${ext}`}
                         title={`Remove ${ext}`}
+                        disabled={blockedSaving}
                         onclick={() => void removeBlockedExtension(ext)}
                       ><Icon name="x" size={11} /></button>
                     </span>
@@ -688,7 +685,7 @@
               {:else}
                 <p class="setting-desc">No extensions are currently blocked.</p>
               {/if}
-              {#if blockedMessage}<span role="status" class="setting-feedback">{blockedMessage}</span>{/if}
+              {#if blockedMessage}<span role={blockedMessage.startsWith('Could not') ? 'alert' : 'status'} class="setting-feedback" class:setting-feedback-error={blockedMessage.startsWith('Could not')}>{blockedMessage}</span>{/if}
             </div>
           </div>
         </section>

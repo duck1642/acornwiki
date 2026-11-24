@@ -271,32 +271,7 @@ const net = require('node:net');
     await page.waitForFunction(() => window.revealedFile?.path === 'guide.pdf');
     await page.getByRole('link',{name:'Other'}).click();
     await page.getByText('other.md',{exact:true}).first().waitFor();
-    await page.evaluate(() => {
-      const api = window.pywebview.api;
-      api.list_plan_notes = async () => ['note.md'];
-      api.read_plan_notes = async () => ({notes:[{path:'note.md',content:'[link](other.md)',version:'v1'}],next_index:1});
-      api.plan_link_targets_batch = async () => [['renamed.md']];
-      api.commit_move = async (id, source, destination, snapshots, rewrites) => {
-        window.moveResult = {id, source, destination, snapshots, rewrites};
-        return {destination, updated:['note.md'], failures:[]};
-      };
-    });
-    await page.getByRole('button',{name:'Source',exact:true}).click();
-    await activeEditor().click();
-    await page.keyboard.press('End'); await page.keyboard.type(' unsaved');
-    page.once('dialog', dialog => dialog.accept('renamed.md'));
-    await page.getByRole('button',{name:'Move or rename other.md'}).click();
-    await page.getByRole('button',{name:'Cancel',exact:true}).click();
-    assert.equal(await page.evaluate(() => window.moveResult), undefined);
-    assert.ok((await activeEditor().innerText()).includes('unsaved'));
-    page.once('dialog', dialog => dialog.accept('renamed.md'));
-    await page.getByRole('button',{name:'Move or rename other.md'}).click();
-    await page.getByRole('alertdialog').getByRole('button',{name:'Discard all',exact:true}).click();
-    await page.getByText('Moved. Updated links in 1 notes.').waitFor();
-    const moved = await page.evaluate(() => window.moveResult);
-    assert.equal(moved.source, 'other.md');
-    assert.equal(moved.destination, 'renamed.md');
-    assert.equal(moved.rewrites[0].content, '[link](renamed.md)');
+    // Move/rename UI trigger was removed from tree rows pending custom right-click context menus (see docs/checklist.md).
     console.log('headless editor checks passed');
   } finally { if (browser) await browser.close(); vite.kill() }
 })().catch(error => { console.error(error); process.exit(1) });

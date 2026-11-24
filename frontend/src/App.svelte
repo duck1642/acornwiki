@@ -134,6 +134,9 @@
   let workspaceMessage = $state('')
   let blockedExtensions = $state('')
   let blockedMessage = $state('')
+  let blockedSaving = $state(false)
+  let blockedPendingCount = 0
+  let blockedSaveQueue: Promise<boolean> = Promise.resolve(true)
   let editorPreferences = $state<EditorPreferences>(defaultEditorPreferences)
   let editorPreferencesLoaded = $state(false)
   let editorPreferenceSaving = $state<Partial<Record<keyof EditorPreferences, boolean>>>({})
@@ -726,12 +729,32 @@
       console.error(error)
     } finally { editorPreferenceSaving = { ...editorPreferenceSaving, [key]: false } }
   }
-  async function saveBlockedExtensions() {
-    try {
-      const extensions = blockedExtensions.split(/[\s,]+/).filter(Boolean)
-      await window.pywebview?.api?.set_blocked_extensions(extensions)
-      blockedMessage = 'Blocked extensions saved.'
-    } catch (error) { blockedMessage = 'Could not save blocked extensions. Use extensions such as .exe.'; console.error(error) }
+  function updateBlockedExtensions(transform: (current: string[]) => string[]): Promise<boolean> {
+    const run = blockedSaveQueue.then(async () => {
+      const api = window.pywebview?.api
+      if (!api) return false
+      const current = blockedExtensions.split(/[\s,]+/).map((item) => item.trim()).filter(Boolean)
+      const next = transform(current)
+      if (next.length === current.length && next.every((item, index) => item === current[index])) return true
+      blockedMessage = ''
+      try {
+        await api.set_blocked_extensions(next)
+        blockedExtensions = next.join(', ')
+        blockedMessage = 'Blocked extensions saved.'
+        return true
+      } catch (error) {
+        blockedMessage = 'Could not save blocked extensions. Use extensions such as .exe.'
+        console.error(error)
+        return false
+      }
+    })
+    blockedPendingCount += 1
+    blockedSaving = true
+    blockedSaveQueue = run.then(() => true, () => false)
+    return run.finally(() => {
+      blockedPendingCount -= 1
+      blockedSaving = blockedPendingCount > 0
+    })
   }
   async function openTreeFile(path: string) {
     if (!workspaceId) return
@@ -746,6 +769,8 @@
       if (workspacePicker) workspacePicker.open = false
       loadingWorkspace = true
       workspaceMessage = ''
+      settingsMessage = ''
+      folderSettingsMessage = ''
       selectedWorkspace = null
       workspaceId = null
       navHistory = []
@@ -1267,14 +1292,15 @@
               {settingsMessage}
               bind:creationFolderInput
               {folderSettingsMessage}
-              bind:blockedExtensions
+              {blockedExtensions}
               {blockedMessage}
+              {blockedSaving}
               {ready}
               connectionMessage={message}
               onSetAppearance={setAppearance}
               onSetEditorPreference={setEditorPreference}
               onSaveCreationFolder={saveCreationFolder}
-              onSaveBlockedExtensions={saveBlockedExtensions}
+              onUpdateBlockedExtensions={updateBlockedExtensions}
               onPing={ping}
             />
           {/if}
